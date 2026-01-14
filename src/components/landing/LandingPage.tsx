@@ -1,51 +1,111 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import { ArrowRight, Globe, Brain, Zap, MessageCircle, Search, Sparkles, Shield } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { motion, useScroll, useTransform } from 'framer-motion';
+import { ArrowRight, Globe, Brain, Zap, MessageCircle, Search, Sparkles, Shield, Mic, Languages, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import PhoenixLogo from '@/components/PhoenixLogo';
-import type { Transition, Easing } from 'framer-motion';
 
 interface LandingPageProps {
   onGetStarted: () => void;
 }
 
 const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
+  const { scrollY } = useScroll();
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+
+  // Parallax transforms
+  const heroY = useTransform(scrollY, [0, 500], [0, 150]);
+  const bgY = useTransform(scrollY, [0, 500], [0, -50]);
+  const opacity = useTransform(scrollY, [0, 300], [1, 0.3]);
+
+  // Track mouse for interactive effects
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({
+        x: (e.clientX / window.innerWidth - 0.5) * 20,
+        y: (e.clientY / window.innerHeight - 0.5) * 20,
+      });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
   const features = [
     { icon: Brain, title: 'Intelligent AI', description: 'Powered by advanced AI that learns your preferences' },
-    { icon: Search, title: 'Live Web Search', description: 'Real-time access to current information' },
-    { icon: Globe, title: 'Multi-Language', description: 'Communicate in 10+ languages' },
+    { icon: Search, title: 'Live Web Search', description: 'Real-time access to current information via Tavily' },
+    { icon: Globe, title: 'Multi-Language', description: 'Communicate in 10+ languages seamlessly' },
     { icon: Zap, title: 'Lightning Fast', description: 'Streaming responses in real-time' },
+    { icon: Mic, title: 'Voice Enabled', description: 'Speak naturally with voice input & output' },
+    { icon: MessageSquare, title: 'WhatsApp Ready', description: 'Connect via WhatsApp for on-the-go AI' },
+  ];
+
+  const stats = [
+    { value: '10+', label: 'Languages' },
+    { value: '24/7', label: 'Availability' },
+    { value: 'Real-time', label: 'Web Search' },
+    { value: '∞', label: 'Possibilities' },
   ];
 
   return (
     <div className="min-h-screen flex flex-col bg-background overflow-hidden relative">
-      {/* Animated background elements */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {/* Animated background elements with parallax */}
+      <motion.div 
+        style={{ y: bgY }}
+        className="absolute inset-0 overflow-hidden pointer-events-none"
+      >
+        {/* Floating particles */}
+        {[...Array(20)].map((_, i) => (
+          <motion.div
+            key={i}
+            className="absolute w-2 h-2 rounded-full bg-primary/20"
+            style={{
+              left: `${Math.random() * 100}%`,
+              top: `${Math.random() * 100}%`,
+            }}
+            animate={{
+              y: [-20, 20, -20],
+              x: [-10, 10, -10],
+              opacity: [0.2, 0.5, 0.2],
+              scale: [0.8, 1.2, 0.8],
+            }}
+            transition={{
+              duration: 4 + Math.random() * 4,
+              repeat: Infinity,
+              delay: Math.random() * 2,
+              ease: "easeInOut",
+            }}
+          />
+        ))}
+
         <motion.div
           animate={{ 
-            scale: [1, 1.05, 1],
-            opacity: [0.5, 0.8, 0.5]
+            scale: [1, 1.1, 1],
+            opacity: [0.4, 0.7, 0.4],
+            x: mousePosition.x * 0.5,
+            y: mousePosition.y * 0.5,
           }}
-          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" as const }}
-          className="absolute top-1/4 -left-32 w-96 h-96 bg-primary/20 rounded-full blur-3xl"
+          transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute top-1/4 -left-32 w-[500px] h-[500px] bg-primary/20 rounded-full blur-3xl"
+        />
+        <motion.div
+          animate={{ 
+            scale: [1, 1.15, 1],
+            opacity: [0.4, 0.6, 0.4],
+            x: mousePosition.x * -0.3,
+            y: mousePosition.y * -0.3,
+          }}
+          transition={{ duration: 5, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+          className="absolute bottom-1/4 -right-32 w-[500px] h-[500px] bg-orange-500/20 rounded-full blur-3xl"
         />
         <motion.div
           animate={{ 
             scale: [1, 1.05, 1],
-            opacity: [0.5, 0.8, 0.5]
+            opacity: [0.2, 0.4, 0.2],
+            rotate: [0, 180, 360],
           }}
-          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" as const, delay: 1 }}
-          className="absolute bottom-1/4 -right-32 w-96 h-96 bg-orange-500/20 rounded-full blur-3xl"
+          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-amber-500/10 rounded-full blur-3xl"
         />
-        <motion.div
-          animate={{ 
-            scale: [1, 1.05, 1],
-            opacity: [0.3, 0.5, 0.3]
-          }}
-          transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" as const, delay: 2 }}
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-amber-500/10 rounded-full blur-3xl"
-        />
-      </div>
+      </motion.div>
 
       {/* Header */}
       <motion.header 
@@ -55,47 +115,66 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
         className="relative z-10 p-4 md:p-6 flex items-center justify-between"
       >
         <PhoenixLogo size="sm" />
-        <Button onClick={onGetStarted} variant="outline" className="gap-2 hover:bg-primary hover:text-primary-foreground transition-all">
+        <Button 
+          onClick={onGetStarted} 
+          variant="outline" 
+          className="gap-2 hover:bg-primary hover:text-primary-foreground transition-all btn-ripple hover-lift"
+        >
           Sign In
           <ArrowRight className="h-4 w-4" />
         </Button>
       </motion.header>
 
-      {/* Hero Section */}
-      <main className="flex-1 flex flex-col items-center justify-center px-4 relative z-10">
+      {/* Hero Section with Parallax */}
+      <motion.main 
+        style={{ y: heroY, opacity }}
+        className="flex-1 flex flex-col items-center justify-center px-4 relative z-10"
+      >
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, staggerChildren: 0.15 }}
-          className="text-center max-w-4xl mx-auto"
+          transition={{ duration: 0.5 }}
+          className="text-center max-w-5xl mx-auto"
         >
-          {/* Floating Phoenix */}
+          {/* Floating Phoenix with glow */}
           <motion.div
-            animate={{ y: [-10, 10, -10] }}
-            transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" as const }}
+            animate={{ 
+              y: [-15, 15, -15],
+              rotateY: [0, 5, 0, -5, 0],
+            }}
+            transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
             className="mb-8"
           >
             <div className="relative inline-block">
               <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ duration: 20, repeat: Infinity, ease: "linear" as const }}
-                className="absolute inset-0 bg-gradient-to-r from-primary via-orange-500 to-amber-500 rounded-full blur-xl opacity-50"
-                style={{ width: '120%', height: '120%', left: '-10%', top: '-10%' }}
+                animate={{ 
+                  rotate: 360,
+                  scale: [1, 1.1, 1],
+                }}
+                transition={{ 
+                  rotate: { duration: 25, repeat: Infinity, ease: "linear" },
+                  scale: { duration: 3, repeat: Infinity, ease: "easeInOut" }
+                }}
+                className="absolute inset-0 bg-gradient-to-r from-primary via-orange-500 to-amber-500 rounded-full blur-2xl opacity-60"
+                style={{ width: '140%', height: '140%', left: '-20%', top: '-20%' }}
               />
-              <PhoenixLogo size="lg" showText={false} />
+              <PhoenixLogo size="lg" showText={false} animate />
             </div>
           </motion.div>
 
-          {/* Headline */}
+          {/* Headline with staggered animation */}
           <motion.h1
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
             className="text-4xl md:text-6xl lg:text-7xl font-bold font-['Poppins'] mb-6 leading-tight"
           >
-            <span className="bg-gradient-to-r from-primary via-orange-500 to-amber-500 bg-clip-text text-transparent">
+            <motion.span 
+              className="text-gradient-animated inline-block"
+              whileHover={{ scale: 1.05 }}
+            >
               Rising
-            </span>{' '}
+            </motion.span>{' '}
             to Every Question,
             <br />
             <span className="text-foreground">In Real Time</span>
@@ -121,7 +200,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
             Created by <span className="text-primary font-medium">IYANU</span> & the Phoenix Team
           </motion.p>
 
-          {/* CTA Buttons */}
+          {/* CTA Buttons with ripple effect */}
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
@@ -131,7 +210,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
             <Button
               onClick={onGetStarted}
               size="lg"
-              className="gradient-phoenix text-primary-foreground px-8 py-6 text-lg gap-2 hover:scale-105 transition-transform shadow-lg shadow-primary/25"
+              className="gradient-phoenix text-primary-foreground px-8 py-6 text-lg gap-2 hover:scale-105 transition-transform shadow-lg shadow-primary/25 btn-ripple animate-pulse-glow"
             >
               <Sparkles className="h-5 w-5" />
               Get Started Free
@@ -140,7 +219,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
             <Button
               variant="outline"
               size="lg"
-              className="px-8 py-6 text-lg gap-2 hover:bg-accent transition-all"
+              className="px-8 py-6 text-lg gap-2 hover:bg-accent transition-all hover-lift"
               onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
             >
               <MessageCircle className="h-5 w-5" />
@@ -148,53 +227,97 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
             </Button>
           </motion.div>
 
+          {/* Stats Row */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.6, delay: 0.6 }}
+            className="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-2xl mx-auto mb-16"
+          >
+            {stats.map((stat, index) => (
+              <motion.div
+                key={stat.label}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.7 + index * 0.1 }}
+                whileHover={{ scale: 1.1 }}
+                className="text-center"
+              >
+                <div className="text-2xl md:text-3xl font-bold text-primary">{stat.value}</div>
+                <div className="text-sm text-muted-foreground">{stat.label}</div>
+              </motion.div>
+            ))}
+          </motion.div>
+
           {/* Features Grid */}
           <motion.div
             id="features"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.6, delay: 0.6 }}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-4xl mx-auto"
+            transition={{ duration: 0.6, delay: 0.7 }}
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto"
           >
             {features.map((feature, index) => (
               <motion.div
                 key={feature.title}
                 initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: 0.7 + index * 0.1 }}
-                whileHover={{ scale: 1.05, y: -5 }}
-                className="glass-card p-6 rounded-2xl text-center group cursor-default"
+                transition={{ duration: 0.5, delay: 0.8 + index * 0.1 }}
+                whileHover={{ 
+                  scale: 1.05, 
+                  y: -8,
+                  boxShadow: "0 20px 40px -20px hsl(var(--phoenix-orange) / 0.3)"
+                }}
+                className="glass-card p-6 rounded-2xl text-center group cursor-default animate-border-glow"
               >
-                <div className="w-12 h-12 mx-auto mb-4 rounded-xl gradient-phoenix flex items-center justify-center group-hover:animate-bounce">
-                  <feature.icon className="h-6 w-6 text-primary-foreground" />
-                </div>
-                <h3 className="font-semibold mb-2">{feature.title}</h3>
+                <motion.div 
+                  whileHover={{ rotate: [0, -10, 10, 0], scale: 1.2 }}
+                  transition={{ duration: 0.5 }}
+                  className="w-14 h-14 mx-auto mb-4 rounded-xl gradient-phoenix flex items-center justify-center shadow-lg"
+                >
+                  <feature.icon className="h-7 w-7 text-primary-foreground" />
+                </motion.div>
+                <h3 className="font-semibold mb-2 text-lg">{feature.title}</h3>
                 <p className="text-sm text-muted-foreground">{feature.description}</p>
               </motion.div>
             ))}
           </motion.div>
         </motion.div>
-      </main>
+      </motion.main>
 
       {/* Footer */}
       <motion.footer
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ delay: 1, duration: 0.6 }}
+        transition={{ delay: 1.2, duration: 0.6 }}
         className="relative z-10 p-6 text-center text-sm text-muted-foreground"
       >
-        <div className="flex items-center justify-center gap-4 mb-2">
-          <div className="flex items-center gap-1">
+        <div className="flex items-center justify-center gap-6 mb-3 flex-wrap">
+          <motion.div 
+            whileHover={{ scale: 1.1 }}
+            className="flex items-center gap-1.5"
+          >
             <Shield className="h-4 w-4 text-green-500" />
             <span>Secure & Private</span>
-          </div>
-          <div className="w-1 h-1 rounded-full bg-muted-foreground" />
-          <div className="flex items-center gap-1">
-            <Globe className="h-4 w-4 text-primary" />
+          </motion.div>
+          <div className="w-1 h-1 rounded-full bg-muted-foreground hidden sm:block" />
+          <motion.div 
+            whileHover={{ scale: 1.1 }}
+            className="flex items-center gap-1.5"
+          >
+            <Languages className="h-4 w-4 text-primary" />
             <span>10+ Languages</span>
-          </div>
+          </motion.div>
+          <div className="w-1 h-1 rounded-full bg-muted-foreground hidden sm:block" />
+          <motion.div 
+            whileHover={{ scale: 1.1 }}
+            className="flex items-center gap-1.5"
+          >
+            <MessageSquare className="h-4 w-4 text-green-600" />
+            <span>WhatsApp Ready</span>
+          </motion.div>
         </div>
-        <p>© 2025 Phoenix AI. All rights reserved.</p>
+        <p>© 2026 Phoenix AI. All rights reserved.</p>
       </motion.footer>
     </div>
   );

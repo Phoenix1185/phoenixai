@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -130,9 +131,10 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
             href={linkMatch[2]} 
             target="_blank" 
             rel="noopener noreferrer"
-            className="text-primary hover:underline"
+            className="text-primary hover:underline inline-flex items-center gap-1"
           >
             {linkMatch[1]}
+            <span className="text-xs">↗</span>
           </a>
         );
       }
@@ -157,14 +159,24 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   };
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
       className={cn(
-        'flex gap-3 animate-fade-in',
+        'flex gap-3',
         isUser ? 'justify-end' : 'justify-start'
       )}
     >
       {!isUser && (
-        <div className="w-8 h-8 rounded-lg gradient-phoenix flex items-center justify-center shrink-0 shadow-lg">
+        <motion.div 
+          animate={isStreaming ? { 
+            scale: [1, 1.1, 1],
+            rotate: [0, 5, -5, 0]
+          } : {}}
+          transition={{ duration: 1.5, repeat: isStreaming ? Infinity : 0 }}
+          className="w-8 h-8 rounded-lg gradient-phoenix flex items-center justify-center shrink-0 shadow-lg"
+        >
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -179,32 +191,42 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
             />
             <path d="M12 16C12 16 8 18 6 22M12 16C12 16 16 18 18 22" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
-        </div>
+        </motion.div>
       )}
 
-      <div
+      <motion.div
+        layout
         className={cn(
           'max-w-[80%] rounded-2xl px-4 py-3 shadow-sm',
           isUser
             ? 'gradient-phoenix text-primary-foreground'
-            : 'glass-card'
+            : 'glass-card hover-lift'
         )}
       >
         <div className="text-sm leading-relaxed">
           {renderContent(message.content)}
           {isStreaming && (
-            <span className="inline-block w-2 h-5 bg-primary ml-1 animate-pulse rounded-sm" />
+            <motion.span 
+              animate={{ opacity: [1, 0, 1] }}
+              transition={{ duration: 0.8, repeat: Infinity }}
+              className="inline-block w-2 h-5 bg-primary ml-1 rounded-sm"
+            />
           )}
         </div>
 
         {!isUser && !isStreaming && message.content && (
-          <div className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30"
+          >
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 hover:bg-accent"
+                  className="h-7 w-7 hover:bg-accent hover-scale"
                   onClick={copyToClipboard}
                 >
                   {copied ? (
@@ -223,7 +245,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className={cn('h-7 w-7 hover:bg-accent', isSpeaking && 'text-primary bg-primary/10')}
+                    className={cn('h-7 w-7 hover:bg-accent hover-scale', isSpeaking && 'text-primary bg-primary/10')}
                     onClick={() => onSpeak(message.content)}
                   >
                     {isSpeaking ? (
@@ -242,7 +264,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn('h-7 w-7 hover:bg-accent', message.rating === 1 && 'text-green-500 bg-green-500/10')}
+                  className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === 1 && 'text-green-500 bg-green-500/10')}
                   onClick={() => onRate(1)}
                 >
                   <ThumbsUp className="h-3.5 w-3.5" />
@@ -256,7 +278,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn('h-7 w-7 hover:bg-accent', message.rating === -1 && 'text-destructive bg-destructive/10')}
+                  className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === -1 && 'text-destructive bg-destructive/10')}
                   onClick={() => onRate(-1)}
                 >
                   <ThumbsDown className="h-3.5 w-3.5" />
@@ -264,16 +286,16 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
               </TooltipTrigger>
               <TooltipContent>Poor response</TooltipContent>
             </Tooltip>
-          </div>
+          </motion.div>
         )}
-      </div>
+      </motion.div>
 
       {isUser && (
         <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 shadow-sm">
           <span className="text-xs font-medium">You</span>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };
 
