@@ -430,7 +430,7 @@ const Settings: React.FC = () => {
                           </Select>
                         </div>
 
-
+                        <div className="space-y-2">
                           <Label>Interests</Label>
                           <div className="flex gap-2">
                             <Input
