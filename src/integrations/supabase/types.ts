@@ -144,6 +144,7 @@ export type Database = {
           expertise_level: Database["public"]["Enums"]["expertise_level"] | null
           id: string
           interests: string[] | null
+          language: string | null
           preferred_style: Database["public"]["Enums"]["preferred_style"] | null
           response_length: Database["public"]["Enums"]["response_length"] | null
           theme: string | null
@@ -157,6 +158,7 @@ export type Database = {
             | null
           id?: string
           interests?: string[] | null
+          language?: string | null
           preferred_style?:
             | Database["public"]["Enums"]["preferred_style"]
             | null
@@ -174,6 +176,7 @@ export type Database = {
             | null
           id?: string
           interests?: string[] | null
+          language?: string | null
           preferred_style?:
             | Database["public"]["Enums"]["preferred_style"]
             | null

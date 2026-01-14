@@ -4,30 +4,35 @@ import { cn } from '@/lib/utils';
 interface PhoenixLogoProps {
   className?: string;
   showText?: boolean;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  animate?: boolean;
 }
 
 const PhoenixLogo: React.FC<PhoenixLogoProps> = ({ 
   className, 
   showText = true,
-  size = 'md' 
+  size = 'md',
+  animate = false
 }) => {
   const sizeClasses = {
     sm: 'w-8 h-8',
     md: 'w-10 h-10',
-    lg: 'w-14 h-14'
+    lg: 'w-14 h-14',
+    xl: 'w-20 h-20'
   };
 
   const textSizeClasses = {
     sm: 'text-lg',
     md: 'text-xl',
-    lg: 'text-2xl'
+    lg: 'text-2xl',
+    xl: 'text-3xl'
   };
 
   return (
     <div className={cn('flex items-center gap-3', className)}>
       <div className={cn(
-        'relative flex items-center justify-center rounded-xl gradient-phoenix animate-float',
+        'relative flex items-center justify-center rounded-xl gradient-phoenix',
+        animate && 'animate-float',
         sizeClasses[size]
       )}>
         <svg

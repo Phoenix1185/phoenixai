@@ -10,6 +10,7 @@ interface UserPreferences {
   response_length: 'concise' | 'balanced' | 'detailed';
   expertise_level: 'beginner' | 'intermediate' | 'expert';
   interests: string[];
+  language: string;
 }
 
 interface SearchResult {
@@ -212,7 +213,9 @@ IMPORTANT BEHAVIOR:
 - When users share a URL, you CAN read and summarize the content
 - Always cite your sources when using web search results
 - Be conversational and helpful, adapt to the user's communication style
-- If you used web search, mention that you searched for updated information`;
+- If you used web search, mention that you searched for updated information
+
+IMPORTANT: Always respond in the user's preferred language.`;
     
     if (preferences) {
       const styleMap: Record<string, string> = {
@@ -232,15 +235,23 @@ IMPORTANT BEHAVIOR:
         intermediate: 'Use moderate technical language when appropriate.',
         expert: 'Feel free to use technical terms and assume domain knowledge.',
       };
+      
+      const languageMap: Record<string, string> = {
+        en: 'English', es: 'Spanish', fr: 'French', de: 'German',
+        pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', 
+        ar: 'Arabic', hi: 'Hindi', ru: 'Russian'
+      };
 
       const style = preferences.preferred_style || 'casual';
       const length = preferences.response_length || 'balanced';
       const expertise = preferences.expertise_level || 'intermediate';
+      const lang = preferences.language || 'en';
 
       systemPrompt += `\n\nUser preferences:
 - ${styleMap[style] || styleMap.casual}
 - ${lengthMap[length] || lengthMap.balanced}
-- ${expertiseMap[expertise] || expertiseMap.intermediate}`;
+- ${expertiseMap[expertise] || expertiseMap.intermediate}
+- ALWAYS respond in ${languageMap[lang] || 'English'}.`;
       
       if (preferences.interests && preferences.interests.length > 0) {
         systemPrompt += `\n- The user is interested in: ${preferences.interests.join(', ')}.`;

@@ -26,7 +26,21 @@ interface Preferences {
   response_length: 'concise' | 'balanced' | 'detailed';
   expertise_level: 'beginner' | 'intermediate' | 'expert';
   interests: string[];
+  language: string;
 }
+
+const LANGUAGES = [
+  { code: 'en', name: 'English', flag: '🇺🇸' },
+  { code: 'es', name: 'Español', flag: '🇪🇸' },
+  { code: 'fr', name: 'Français', flag: '🇫🇷' },
+  { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
+  { code: 'pt', name: 'Português', flag: '🇧🇷' },
+  { code: 'zh', name: '中文', flag: '🇨🇳' },
+  { code: 'ja', name: '日本語', flag: '🇯🇵' },
+  { code: 'ar', name: 'العربية', flag: '🇸🇦' },
+  { code: 'hi', name: 'हिन्दी', flag: '🇮🇳' },
+  { code: 'ru', name: 'Русский', flag: '🇷🇺' },
+];
 
 const Settings: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -40,6 +54,7 @@ const Settings: React.FC = () => {
     response_length: 'balanced',
     expertise_level: 'intermediate',
     interests: [],
+    language: 'en',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -81,6 +96,7 @@ const Settings: React.FC = () => {
         response_length: prefsResult.data.response_length || 'balanced',
         expertise_level: prefsResult.data.expertise_level || 'intermediate',
         interests: prefsResult.data.interests || [],
+        language: (prefsResult.data as { language?: string }).language || 'en',
       });
     }
 
@@ -162,7 +178,8 @@ const Settings: React.FC = () => {
         response_length: preferences.response_length,
         expertise_level: preferences.expertise_level,
         interests: preferences.interests,
-      })
+        language: preferences.language,
+      } as Record<string, unknown>)
       .eq('user_id', user.id);
 
     if (error) {
@@ -395,6 +412,25 @@ const Settings: React.FC = () => {
                         </div>
 
                         <div className="space-y-2">
+                          <Label>Response Language</Label>
+                          <Select
+                            value={preferences.language}
+                            onValueChange={(value: string) => 
+                              setPreferences({ ...preferences, language: value })
+                            }
+                          >
+                            <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {LANGUAGES.map(lang => (
+                                <SelectItem key={lang.code} value={lang.code}>
+                                  {lang.flag} {lang.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+
                           <Label>Interests</Label>
                           <div className="flex gap-2">
                             <Input
