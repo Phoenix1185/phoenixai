@@ -30,6 +30,11 @@ interface GreenAPIMessage {
   };
 }
 
+interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 // Send typing indicator to WhatsApp
 async function sendTypingIndicator(chatId: string, idInstance: string, apiToken: string): Promise<void> {
   try {
@@ -41,7 +46,7 @@ async function sendTypingIndicator(chatId: string, idInstance: string, apiToken:
         timeout: 5000,
       }),
     });
-    console.log('Typing indicator sent to:', chatId);
+    console.log('⌨️ Typing indicator sent to:', chatId);
   } catch (error) {
     console.error('Failed to send typing indicator:', error);
   }
@@ -50,76 +55,226 @@ async function sendTypingIndicator(chatId: string, idInstance: string, apiToken:
 // Send message via GreenAPI
 async function sendMessage(chatId: string, message: string, idInstance: string, apiToken: string): Promise<void> {
   try {
-    const response = await fetch(`https://api.greenapi.com/waInstance${idInstance}/sendMessage/${apiToken}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chatId,
-        message,
-      }),
-    });
-
-    if (!response.ok) {
-      console.error('Failed to send message:', await response.text());
+    // WhatsApp has a character limit, split long messages
+    const maxLength = 4000;
+    const chunks = [];
+    
+    if (message.length > maxLength) {
+      let remaining = message;
+      while (remaining.length > 0) {
+        // Try to split at a newline or space
+        let splitIndex = maxLength;
+        if (remaining.length > maxLength) {
+          const lastNewline = remaining.lastIndexOf('\n', maxLength);
+          const lastSpace = remaining.lastIndexOf(' ', maxLength);
+          splitIndex = Math.max(lastNewline, lastSpace, maxLength / 2);
+        }
+        chunks.push(remaining.slice(0, splitIndex));
+        remaining = remaining.slice(splitIndex).trim();
+      }
     } else {
-      console.log('Message sent successfully to:', chatId);
+      chunks.push(message);
+    }
+
+    for (const chunk of chunks) {
+      const response = await fetch(`https://api.greenapi.com/waInstance${idInstance}/sendMessage/${apiToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          message: chunk,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error('Failed to send message:', await response.text());
+      } else {
+        console.log('✅ Message sent successfully to:', chatId);
+      }
+      
+      // Small delay between chunks
+      if (chunks.length > 1) {
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
   } catch (error) {
     console.error('Error sending message:', error);
   }
 }
 
+// Get or create conversation for a WhatsApp chat
+async function getOrCreateConversation(
+  supabase: any, 
+  chatId: string, 
+  senderName: string
+): Promise<string> {
+  // Check if conversation exists
+  const { data: existing } = await supabase
+    .from('whatsapp_conversations')
+    .select('id')
+    .eq('chat_id', chatId)
+    .single();
+
+  if (existing) {
+    // Update last activity
+    await supabase
+      .from('whatsapp_conversations')
+      .update({ updated_at: new Date().toISOString(), sender_name: senderName })
+      .eq('id', existing.id);
+    return existing.id;
+  }
+
+  // Create new conversation
+  const { data: newConv, error } = await supabase
+    .from('whatsapp_conversations')
+    .insert({ chat_id: chatId, sender_name: senderName })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('Error creating conversation:', error);
+    throw error;
+  }
+
+  return newConv.id;
+}
+
+// Get conversation history (last N messages for context)
+async function getConversationHistory(
+  supabase: any, 
+  chatId: string, 
+  limit: number = 20
+): Promise<ConversationMessage[]> {
+  const { data: messages, error } = await supabase
+    .from('whatsapp_messages')
+    .select('role, content')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    console.error('Error fetching history:', error);
+    return [];
+  }
+
+  return messages || [];
+}
+
+// Save message to database
+async function saveMessage(
+  supabase: any,
+  conversationId: string,
+  chatId: string,
+  role: 'user' | 'assistant',
+  content: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('whatsapp_messages')
+    .insert({
+      conversation_id: conversationId,
+      chat_id: chatId,
+      role,
+      content,
+    });
+
+  if (error) {
+    console.error('Error saving message:', error);
+  }
+}
+
+// Aggressive search detection (same as web version)
+function needsWebSearch(message: string): boolean {
+  const lowerMsg = message.toLowerCase();
+  const patterns = [
+    /what('s| is) (the )?(latest|current|recent|today|new)/i,
+    /news|price|weather|score|result|update/i,
+    /who (is|was|are|were) (the )?(president|ceo|leader|founder|owner)/i,
+    /who (won|is winning|leads?|runs?|owns?|founded)/i,
+    /(what|who|when|where|how|why) .* (today|right now|currently|2024|2025|2026)/i,
+    /202[4-9]/i,
+    /crypto|bitcoin|btc|ethereum|stock|share/i,
+    /latest|current|recent|trending|happening/i,
+    /search|look up|find/i,
+    /tell me (about|who|what)/i,
+    /twitter|x\.com|instagram|facebook|tiktok|youtube|reddit/i,
+    /who is [A-Z]/i,
+    /\?$/,
+  ];
+  
+  return patterns.some(p => p.test(lowerMsg) || p.test(message));
+}
+
 // Process message with Phoenix AI (non-streaming for WhatsApp)
-async function processWithPhoenixAI(message: string, senderName: string): Promise<string> {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+async function processWithPhoenixAI(
+  message: string, 
+  senderName: string,
+  conversationHistory: ConversationMessage[]
+): Promise<string> {
   const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
 
   if (!lovableApiKey) {
     throw new Error('LOVABLE_API_KEY not configured');
   }
 
+  const currentDate = new Date();
+  const formattedDate = currentDate.toLocaleDateString('en-US', { 
+    weekday: 'long', 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric' 
+  });
+
   const systemPrompt = `You are Phoenix AI on WhatsApp, an intelligent assistant created by IYANU and the Phoenix Team.
 
-Current date: ${new Date().toISOString().split('T')[0]}
-
-IMPORTANT FOR WHATSAPP:
-- Keep responses concise (under 1500 characters when possible)
-- Use simple formatting (no markdown, just plain text with emojis)
-- Be conversational and friendly
-- You can use emojis sparingly for emphasis 🔥
-- Don't use code blocks - describe code instead
-- Break up long responses into readable paragraphs
+CURRENT DATE: ${formattedDate} (Year: ${currentDate.getFullYear()})
 
 The user's name is: ${senderName}
 
-You have access to real-time web search. When asked about current events, news, or time-sensitive topics, you can search the web.`;
+IMPORTANT FOR WHATSAPP:
+- You REMEMBER the conversation history - this is an ongoing chat, not separate messages
+- Refer back to previous messages when relevant
+- Be natural and conversational, like texting a smart friend
+- Use simple formatting (no markdown, just plain text with emojis)
+- Keep responses under 2000 characters when possible
+- You CAN use emojis for emphasis 🔥
+- Don't use code blocks - explain code in plain text
+- Break up long responses into readable paragraphs
+
+You have access to REAL-TIME web search. When asked about current events, news, or factual questions, you WILL search the web and provide accurate, up-to-date information.
+
+CRITICAL: You have access to live information via Tavily search. NEVER say you don't have current information - you DO.`;
 
   // Check if web search is needed
   let webContext = '';
-  const lowerMsg = message.toLowerCase();
-  const needsSearch = /what('s| is) (the )?(latest|current|recent|today|new)|news|price|weather|score|2024|2025|2026|trending/i.test(lowerMsg);
-
-  if (needsSearch) {
+  if (needsWebSearch(message)) {
     const tavilyKey = Deno.env.get('TAVILY_API_KEY');
     if (tavilyKey) {
       try {
+        console.log('🔍 WhatsApp: Searching for:', message);
         const searchResponse = await fetch('https://api.tavily.com/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             api_key: tavilyKey,
             query: message,
-            search_depth: 'basic',
-            max_results: 3,
+            search_depth: 'advanced',
+            include_answer: true,
+            max_results: 5,
           }),
         });
 
         if (searchResponse.ok) {
           const searchData = await searchResponse.json();
           if (searchData.results?.length > 0) {
-            webContext = '\n\nWeb search results:\n' + searchData.results.map((r: any) => 
-              `- ${r.title}: ${r.content.slice(0, 300)}... (${r.url})`
-            ).join('\n');
+            console.log('✅ Got', searchData.results.length, 'search results');
+            webContext = '\n\n[LIVE WEB SEARCH RESULTS - USE THIS DATA]:\n' + 
+              searchData.results.map((r: any) => 
+                `• ${r.title}: ${r.content.slice(0, 500)} (Source: ${r.url})`
+              ).join('\n\n');
+            
+            if (searchData.answer) {
+              webContext = `\n\n[QUICK ANSWER]: ${searchData.answer}\n` + webContext;
+            }
           }
         }
       } catch (e) {
@@ -128,7 +283,14 @@ You have access to real-time web search. When asked about current events, news, 
     }
   }
 
-  const userContent = message + (webContext ? `\n\n[Context from web search]:${webContext}` : '');
+  const userContent = message + webContext;
+
+  // Build messages array with conversation history
+  const messagesForAI = [
+    { role: 'system', content: systemPrompt },
+    ...conversationHistory.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: userContent },
+  ];
 
   // Call Lovable AI Gateway (non-streaming)
   const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -139,12 +301,9 @@ You have access to real-time web search. When asked about current events, news, 
     },
     body: JSON.stringify({
       model: 'google/gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
+      messages: messagesForAI,
       stream: false,
-      max_tokens: 1024,
+      max_tokens: 2048,
     }),
   });
 
@@ -178,6 +337,8 @@ Deno.serve(async (req) => {
   try {
     const idInstance = Deno.env.get('GREENAPI_ID_INSTANCE');
     const apiToken = Deno.env.get('GREENAPI_API_TOKEN_INSTANCE');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
     if (!idInstance || !apiToken) {
       console.error('GreenAPI credentials not configured');
@@ -187,8 +348,10 @@ Deno.serve(async (req) => {
       );
     }
 
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const webhook: GreenAPIMessage = await req.json();
-    console.log('Received webhook:', webhook.typeWebhook, webhook.senderData?.chatId);
+    
+    console.log('📱 Received webhook:', webhook.typeWebhook, webhook.senderData?.chatId);
 
     // Only process incoming messages
     if (webhook.typeWebhook !== 'incomingMessageReceived') {
@@ -233,18 +396,30 @@ Deno.serve(async (req) => {
     // Send typing indicator immediately (non-blocking)
     sendTypingIndicator(chatId, idInstance, apiToken);
 
-    // Process with Phoenix AI
-    console.log(`Processing message from ${senderName}: ${messageText.slice(0, 100)}...`);
-    const aiResponse = await processWithPhoenixAI(messageText, senderName);
+    // Get or create conversation & fetch history (parallel)
+    const [conversationId, history] = await Promise.all([
+      getOrCreateConversation(supabase, chatId, senderName),
+      getConversationHistory(supabase, chatId, 20),
+    ]);
 
-    // Send another typing indicator if AI took time
+    // Save the user message
+    await saveMessage(supabase, conversationId, chatId, 'user', messageText);
+
+    // Process with Phoenix AI (with conversation context)
+    console.log(`🧠 Processing message from ${senderName} (${history.length} messages in history)`);
+    const aiResponse = await processWithPhoenixAI(messageText, senderName, history);
+
+    // Save the assistant response
+    await saveMessage(supabase, conversationId, chatId, 'assistant', aiResponse);
+
+    // Send another typing indicator before response (in case AI took time)
     sendTypingIndicator(chatId, idInstance, apiToken);
 
     // Send the response
     await sendMessage(chatId, aiResponse, idInstance, apiToken);
 
     return new Response(
-      JSON.stringify({ status: 'success', processed: true }),
+      JSON.stringify({ status: 'success', processed: true, historyLength: history.length + 2 }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 

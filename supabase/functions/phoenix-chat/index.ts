@@ -27,39 +27,85 @@ interface FirecrawlResult {
   markdown?: string;
 }
 
-// Detect if user needs real-time information
+// AGGRESSIVE search detection - now catches almost any factual question
 function needsWebSearch(message: string): { needed: boolean; query: string } {
   const lowerMsg = message.toLowerCase();
   
-  // Patterns that indicate need for live data
+  // Patterns that indicate need for live data - MUCH MORE COMPREHENSIVE
   const patterns = [
+    // Current events and time-sensitive queries
     /what('s| is) (the )?(latest|current|recent|today'?s?|new)/i,
     /news (about|on|regarding)/i,
     /(price|stock|weather|score|result|update) (of|for|on)/i,
-    /who (won|is winning|leads?)/i,
-    /tell me about (current|latest|recent)/i,
-    /search (for|about)/i,
-    /look up/i,
-    /find (me |out )?(information|info|details|news)/i,
-    /(what|who|when|where|how) .* (today|right now|currently|2024|2025|2026)/i,
+    
+    // WHO/WHAT/WHERE questions about real entities
+    /who (is|was|are|were) (the |a )?(president|prime minister|ceo|leader|founder|owner|king|queen|chancellor)/i,
+    /who (is|are) .*('s|s') (president|leader|ceo|pm|prime minister)/i,
+    /who (won|is winning|leads?|runs?|owns?|founded)/i,
+    /who is [\w\s]+ (of|in|at|for)/i,
+    
+    // Questions about places, organizations, events
+    /what is the (capital|population|gdp|currency|language) of/i,
+    /where is (the |a )?[\w\s]+/i,
+    /when (did|does|will|is) /i,
+    
+    // Current year references
+    /(what|who|when|where|how|why) .* (today|right now|currently|2024|2025|2026)/i,
+    /(in |as of )?202[4-9]/i,
+    
+    // Crypto and finance
     /crypto(currency)? (price|market)/i,
-    /\b(bitcoin|btc|ethereum|eth)\b.*(price|worth|value)/i,
+    /\b(bitcoin|btc|ethereum|eth|doge)\b.*(price|worth|value)/i,
+    /(stock|share) (price|value)/i,
+    
+    // Real-time keywords
     /latest .*/i,
     /current .*/i,
     /recent .*/i,
     /trending/i,
     /happening (now|today|right now)/i,
+    
+    // Search intent
+    /search (for|about)/i,
+    /look up/i,
+    /find (me |out )?(information|info|details|news|about)/i,
+    /tell me (about|who|what|where|when|how|why)/i,
+    /can you (search|find|look up|tell me)/i,
+    
+    // Social media and websites
+    /(twitter|x\.com|instagram|facebook|tiktok|youtube|linkedin|reddit)/i,
+    /on (twitter|x|instagram|facebook|tiktok|youtube|linkedin|reddit)/i,
+    /social media/i,
+    
+    // General factual questions that need current info
+    /who is [A-Z]/i,  // Proper nouns starting with capital
+    /what happened/i,
+    /how (many|much|old|tall|big|long)/i,
+    /is .* (dead|alive|married|president|ceo)/i,
+    
+    // Sports and entertainment
+    /(game|match|score|result|winner|champion)/i,
+    /(movie|film|show|series|album|song) .*(released|coming|new|latest)/i,
+    
+    // Any question about real-world entities
+    /\?(who|what|where|when|why|how)/i,  // Questions at end
+    /^(who|what|where|when|why|how) /i,  // Questions at start
   ];
   
   for (const pattern of patterns) {
-    if (pattern.test(lowerMsg)) {
-      // Extract the search query
+    if (pattern.test(lowerMsg) || pattern.test(message)) {
+      // Extract the search query - clean it up
       const query = message
-        .replace(/^(hey |hi |hello |okay |ok )/i, '')
+        .replace(/^(hey |hi |hello |okay |ok |please |can you |could you )/i, '')
         .replace(/\?$/g, '')
         .trim();
       return { needed: true, query };
     }
+  }
+  
+  // If the message is a question (ends with ?) and mentions any proper noun, search
+  if (message.includes('?') && /[A-Z][a-z]+/.test(message)) {
+    return { needed: true, query: message.replace(/\?$/g, '').trim() };
   }
   
   return { needed: false, query: '' };
@@ -81,7 +127,7 @@ async function performTavilySearch(query: string): Promise<TavilyResult[]> {
   }
 
   try {
-    console.log('Performing Tavily search for:', query);
+    console.log('🔍 Performing Tavily search for:', query);
     const response = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
@@ -93,7 +139,9 @@ async function performTavilySearch(query: string): Promise<TavilyResult[]> {
         search_depth: 'advanced',
         include_answer: true,
         include_raw_content: false,
-        max_results: 5,
+        max_results: 8, // Increased for better coverage
+        include_domains: [], // No restrictions - access all sites
+        exclude_domains: [], // No exclusions
       }),
     });
 
@@ -103,7 +151,13 @@ async function performTavilySearch(query: string): Promise<TavilyResult[]> {
     }
 
     const data = await response.json();
-    console.log('Tavily returned', data.results?.length || 0, 'results');
+    console.log('✅ Tavily returned', data.results?.length || 0, 'results');
+    
+    // Also include the generated answer if available
+    if (data.answer) {
+      console.log('📝 Tavily provided answer:', data.answer.slice(0, 100) + '...');
+    }
+    
     return data.results || [];
   } catch (error) {
     console.error('Tavily search error:', error);
@@ -128,7 +182,7 @@ async function performFirecrawlSearch(query: string): Promise<FirecrawlResult[]>
       },
       body: JSON.stringify({
         query,
-        limit: 5,
+        limit: 8,
         scrapeOptions: {
           formats: ['markdown'],
         },
@@ -154,11 +208,11 @@ async function performWebSearch(query: string): Promise<string> {
   const tavilyResults = await performTavilySearch(query);
   
   if (tavilyResults.length > 0) {
-    let context = '\n\n🔍 **Live Web Search Results (Tavily - Real-time):**\n\n';
+    let context = '\n\n🔍 **Live Web Search Results (Real-time from Tavily):**\n\n';
     for (const result of tavilyResults) {
       context += `### ${result.title}\n`;
       context += `*Source: ${result.url}*\n\n`;
-      const content = result.content.length > 2000 ? result.content.slice(0, 2000) + '...' : result.content;
+      const content = result.content.length > 2500 ? result.content.slice(0, 2500) + '...' : result.content;
       context += `${content}\n\n---\n\n`;
     }
     return context;
@@ -173,7 +227,7 @@ async function performWebSearch(query: string): Promise<string> {
       context += `### ${result.title}\n`;
       context += `*Source: ${result.url}*\n\n`;
       if (result.markdown) {
-        const truncated = result.markdown.length > 1500 ? result.markdown.slice(0, 1500) + '...' : result.markdown;
+        const truncated = result.markdown.length > 2000 ? result.markdown.slice(0, 2000) + '...' : result.markdown;
         context += `${truncated}\n\n---\n\n`;
       } else if (result.description) {
         context += `${result.description}\n\n---\n\n`;
@@ -193,6 +247,7 @@ async function scrapeUrl(url: string): Promise<string | null> {
   }
 
   try {
+    console.log('📄 Scraping URL:', url);
     const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: {
@@ -203,6 +258,8 @@ async function scrapeUrl(url: string): Promise<string | null> {
         url,
         formats: ['markdown'],
         onlyMainContent: true,
+        waitFor: 2000, // Wait for dynamic content
+        timeout: 30000,
       }),
     });
 
@@ -243,6 +300,9 @@ Deno.serve(async (req) => {
     const urlToRead = extractUrl(lastUserMessage);
     const searchCheck = needsWebSearch(lastUserMessage);
 
+    console.log('📨 Message:', lastUserMessage.slice(0, 100));
+    console.log('🔎 Needs search:', searchCheck.needed, '| Query:', searchCheck.query);
+
     // Parallel fetch: preferences and web data
     const preferencesPromise = userId 
       ? supabase.from('user_preferences').select('*').eq('user_id', userId).maybeSingle()
@@ -251,7 +311,7 @@ Deno.serve(async (req) => {
     const webContextPromise = urlToRead
       ? scrapeUrl(urlToRead).then(content => {
           if (content) {
-            const truncated = content.length > 10000 ? content.slice(0, 10000) + '...\n[Content truncated]' : content;
+            const truncated = content.length > 12000 ? content.slice(0, 12000) + '...\n[Content truncated]' : content;
             return `\n\n📄 **Content from ${urlToRead}:**\n\n${truncated}`;
           }
           return '';
@@ -264,31 +324,41 @@ Deno.serve(async (req) => {
     const preferences = preferencesResult.data as UserPreferences | null;
 
     // Build system prompt based on preferences
+    const currentDate = new Date();
+    const formattedDate = currentDate.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
+    
     let systemPrompt = `You are Phoenix AI, an intelligent and adaptive personal assistant created by IYANU and the Phoenix Team. You are helpful, accurate, engaging, and slightly witty.
 
 Your tagline is: "Rising to every question, in real time."
 
-Current date: ${new Date().toISOString().split('T')[0]}
+CURRENT DATE: ${formattedDate} (Year: ${currentDate.getFullYear()})
 
 Your core capabilities:
-- Answer questions with up-to-date knowledge (you have access to live web search via Tavily)
+- Answer questions with up-to-date knowledge (you have access to LIVE web search via Tavily)
+- Access ANY website including social media (Twitter/X, Instagram, Facebook, YouTube, etc.)
 - Generate content: blogs, tweets, summaries, reports, SEO content
 - Read and summarize web pages when users share URLs
 - Explain complex topics clearly at the user's level
 - Help with creative writing, brainstorming, and analysis
 - Provide personalized responses based on user preferences
 
-IMPORTANT BEHAVIOR:
-- You understand natural language - users don't need special commands
-- When users ask about current events, news, or real-time information, you CAN access live web data
-- When users share a URL, you CAN read and summarize the content
-- Always cite your sources when using web search results with clickable links
-- Be conversational and helpful, adapt to the user's communication style
-- If you used web search, mention that you searched for updated information
-- NEVER truncate or cut off your responses. Always provide complete information.
-- Format responses nicely with headers, bullet points, and proper spacing for readability.
+CRITICAL BEHAVIOR RULES:
+1. You CAN and DO access real-time web information for current events, facts, and news
+2. When web search results are provided, USE THEM to give accurate, up-to-date answers
+3. Always cite your sources with clickable links when using web data
+4. NEVER say you don't have access to current information - you DO via web search
+5. NEVER truncate or cut off your responses - always provide complete information
+6. Format responses nicely with headers, bullet points, and proper spacing
+7. Be conversational and helpful, adapt to the user's communication style
 
-IMPORTANT: Always respond in the user's preferred language.`;
+IMPORTANT: If web search results are provided below your message, that data is FRESH and REAL-TIME. Use it to answer the user's question accurately.
+
+Always respond in the user's preferred language.`;
     
     if (preferences) {
       const styleMap: Record<string, string> = {
@@ -337,8 +407,9 @@ IMPORTANT: Always respond in the user's preferred language.`;
       const lastIdx = processedMessages.length - 1;
       processedMessages[lastIdx] = {
         ...processedMessages[lastIdx],
-        content: processedMessages[lastIdx].content + '\n\n---\n**Context from live web search:**' + webContext,
+        content: processedMessages[lastIdx].content + '\n\n---\n**FRESH WEB SEARCH RESULTS (use this data to answer):**' + webContext,
       };
+      console.log('✅ Added web context to message');
     }
 
     // Call Lovable AI Gateway with streaming
@@ -362,7 +433,7 @@ IMPORTANT: Always respond in the user's preferred language.`;
           ...processedMessages,
         ],
         stream: true,
-        max_tokens: 4096, // Increase token limit to prevent cutoffs
+        max_tokens: 8192, // Increased for complete responses
       }),
     });
 
