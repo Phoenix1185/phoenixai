@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Loader2, Sparkles } from 'lucide-react';
+import { Send, Loader2, Sparkles, Mic, MicOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
@@ -9,6 +9,9 @@ import TypingIndicator from './TypingIndicator';
 import PhoenixLoader from './PhoenixLoader';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { useVoiceInput } from '@/hooks/useVoiceInput';
+import { useVoiceOutput } from '@/hooks/useVoiceOutput';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface Message {
   id: string;
@@ -33,10 +36,33 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Voice hooks
+  const { 
+    isListening, 
+    isSupported: voiceInputSupported, 
+    startListening, 
+    stopListening 
+  } = useVoiceInput({
+    onResult: (transcript) => {
+      setInput(prev => prev + (prev ? ' ' : '') + transcript);
+    },
+    onError: (error) => {
+      toast({ variant: 'destructive', description: error });
+    },
+  });
+
+  const { 
+    isSpeaking, 
+    isSupported: voiceOutputSupported, 
+    speak, 
+    stop: stopSpeaking 
+  } = useVoiceOutput();
 
   useEffect(() => {
     if (conversationId && user) {
@@ -71,7 +97,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const streamChat = useCallback(async (
     chatMessages: { role: string; content: string }[],
     onDelta: (deltaText: string) => void,
-    onDone: () => void
+    onDone: (fullText: string) => void
   ) => {
     const resp = await fetch(CHAT_URL, {
       method: 'POST',
@@ -101,6 +127,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let textBuffer = '';
+    let fullContent = '';
     let streamDone = false;
 
     while (!streamDone) {
@@ -126,7 +153,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
           const parsed = JSON.parse(jsonStr);
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-          if (content) onDelta(content);
+          if (content) {
+            fullContent += content;
+            onDelta(content);
+          }
         } catch {
           textBuffer = line + '\n' + textBuffer;
           break;
@@ -146,17 +176,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
           const parsed = JSON.parse(jsonStr);
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-          if (content) onDelta(content);
+          if (content) {
+            fullContent += content;
+            onDelta(content);
+          }
         } catch { /* ignore */ }
       }
     }
 
-    onDone();
+    onDone(fullContent);
   }, [user?.id, conversationId, toast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || !user) return;
+
+    // Stop voice input if active
+    if (isListening) {
+      stopListening();
+    }
 
     const userMessage = input.trim();
     setInput('');
@@ -239,19 +277,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       await streamChat(
         chatHistory,
         updateAssistant,
-        async () => {
+        async (fullText: string) => {
           setIsStreaming(false);
           setIsLoading(false);
 
+          // Auto-speak if enabled
+          if (autoSpeak && voiceOutputSupported && fullText) {
+            // Strip markdown for speech
+            const plainText = fullText
+              .replace(/```[\s\S]*?```/g, 'code block')
+              .replace(/[*_`#]/g, '')
+              .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+            speak(plainText);
+          }
+
           // Save assistant message to database
-          if (currentConversationId && assistantContent) {
+          if (currentConversationId && fullText) {
             const { data: savedAssistantMsg } = await supabase
               .from('messages')
               .insert({
                 conversation_id: currentConversationId,
                 user_id: user.id,
                 role: 'assistant',
-                content: assistantContent,
+                content: fullText,
               })
               .select()
               .single();
@@ -311,11 +359,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
   };
 
-  const commandSuggestions = [
-    { icon: '🔍', text: '/search latest AI news', label: 'Search the web' },
-    { icon: '📖', text: '/read https://example.com', label: 'Read a webpage' },
-    { icon: '📝', text: '/blog AI in healthcare', label: 'Write a blog post' },
-    { icon: '🐦', text: '/tweet productivity tips', label: 'Create a tweet' },
+  const handleSpeakMessage = (content: string) => {
+    if (isSpeaking) {
+      stopSpeaking();
+    } else {
+      const plainText = content
+        .replace(/```[\s\S]*?```/g, 'code block')
+        .replace(/[*_`#]/g, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+      speak(plainText);
+    }
+  };
+
+  const toggleVoiceInput = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  };
+
+  const examplePrompts = [
+    { icon: '🔍', text: 'What are the latest news in AI?', label: 'Latest AI news' },
+    { icon: '📖', text: 'Summarize this article for me', label: 'Summarize content' },
+    { icon: '📝', text: 'Write a blog post about productivity', label: 'Write a blog post' },
+    { icon: '💡', text: 'Give me startup ideas for 2025', label: 'Generate ideas' },
   ];
 
   return (
@@ -329,15 +397,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               Welcome to <span className="text-primary">Phoenix AI</span>
             </h2>
             <p className="text-muted-foreground max-w-md mb-2">
-              Your intelligent assistant that learns from every conversation. 
-              Rising to every question, in real time.
+              Your intelligent assistant with live web search. Just ask naturally – 
+              no commands needed!
             </p>
             <p className="text-xs text-muted-foreground mb-8">
               Created by <span className="text-primary">IYANU</span> & Phoenix Team
             </p>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
-              {commandSuggestions.map((cmd, i) => (
+              {examplePrompts.map((cmd, i) => (
                 <button
                   key={i}
                   onClick={() => setInput(cmd.text)}
@@ -347,7 +415,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <span className="text-2xl">{cmd.icon}</span>
                     <div>
                       <p className="font-medium text-sm">{cmd.label}</p>
-                      <p className="text-xs text-muted-foreground font-mono">{cmd.text}</p>
+                      <p className="text-xs text-muted-foreground">{cmd.text}</p>
                     </div>
                   </div>
                 </button>
@@ -361,6 +429,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 key={message.id}
                 message={message}
                 onRate={(rating) => handleRating(message.id, rating)}
+                onSpeak={voiceOutputSupported ? handleSpeakMessage : undefined}
+                isSpeaking={isSpeaking}
                 isStreaming={isStreaming && message.id.startsWith('stream-')}
               />
             ))}
@@ -379,31 +449,55 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={user ? "Ask Phoenix anything... Try /search, /read, /blog, /tweet" : "Sign in to start chatting..."}
+              placeholder={user ? "Ask Phoenix anything..." : "Sign in to start chatting..."}
               disabled={!user || isLoading}
-              className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-14 focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-28 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
             />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!input.trim() || isLoading || !user}
-              className={cn(
-                'absolute right-2 bottom-2 h-10 w-10 rounded-xl transition-all',
-                input.trim() ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
+            <div className="absolute right-2 bottom-2 flex items-center gap-1">
+              {voiceInputSupported && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={toggleVoiceInput}
+                      disabled={!user}
+                      className={cn(
+                        'h-10 w-10 rounded-xl transition-all',
+                        isListening && 'bg-destructive/20 text-destructive animate-pulse'
+                      )}
+                    >
+                      {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{isListening ? 'Stop listening' : 'Voice input'}</p>
+                  </TooltipContent>
+                </Tooltip>
               )}
-            >
-              {isLoading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <Send className="h-5 w-5" />
-              )}
-            </Button>
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!input.trim() || isLoading || !user}
+                className={cn(
+                  'h-10 w-10 rounded-xl transition-all',
+                  input.trim() ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
+                )}
+              >
+                {isLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Send className="h-5 w-5" />
+                )}
+              </Button>
+            </div>
           </div>
           <div className="flex items-center justify-center gap-2 mt-2">
             <Sparkles className="h-3 w-3 text-primary" />
             <p className="text-xs text-muted-foreground">
-              Phoenix AI learns from your feedback • Streaming responses enabled
+              Phoenix AI with live web search • {voiceInputSupported ? 'Voice enabled' : 'Voice not supported'}
             </p>
           </div>
         </form>
