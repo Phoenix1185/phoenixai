@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import AppSidebar from '@/components/sidebar/AppSidebar';
 import ChatInterface from '@/components/chat/ChatInterface';
@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import PhoenixLogo from '@/components/PhoenixLogo';
 
-const Index: React.FC = () => {
+const Chat: React.FC = () => {
+  const { conversationId } = useParams();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const { user, loading } = useAuth();
   const navigate = useNavigate();
@@ -53,7 +54,10 @@ const Index: React.FC = () => {
 
           {/* Chat Interface */}
           <div className="flex-1 overflow-hidden">
-            <ChatInterface onConversationCreated={handleConversationCreated} />
+            <ChatInterface 
+              conversationId={conversationId} 
+              onConversationCreated={handleConversationCreated} 
+            />
           </div>
         </main>
 
@@ -63,4 +67,4 @@ const Index: React.FC = () => {
   );
 };
 
-export default Index;
+export default Chat;
