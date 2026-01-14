@@ -1,12 +1,14 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import ChatMessage from './ChatMessage';
 import TypingIndicator from './TypingIndicator';
+import PhoenixLoader from './PhoenixLoader';
 import { cn } from '@/lib/utils';
+import { useToast } from '@/hooks/use-toast';
 
 interface Message {
   id: string;
@@ -21,6 +23,8 @@ interface ChatInterfaceProps {
   onConversationCreated?: (id: string) => void;
 }
 
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/phoenix-chat`;
+
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   conversationId, 
   onConversationCreated 
@@ -28,10 +32,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { user } = useAuth();
+  const { toast } = useToast();
 
   useEffect(() => {
     if (conversationId && user) {
@@ -43,7 +48,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isTyping]);
+  }, [messages, isStreaming]);
 
   const fetchMessages = async () => {
     if (!conversationId) return;
@@ -63,9 +68,95 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const streamChat = useCallback(async (
+    chatMessages: { role: string; content: string }[],
+    onDelta: (deltaText: string) => void,
+    onDone: () => void
+  ) => {
+    const resp = await fetch(CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+      },
+      body: JSON.stringify({ 
+        messages: chatMessages,
+        userId: user?.id,
+        conversationId 
+      }),
+    });
+
+    if (!resp.ok) {
+      const errorData = await resp.json().catch(() => ({}));
+      if (resp.status === 429) {
+        toast({ variant: 'destructive', description: 'Rate limit exceeded. Please wait a moment.' });
+      } else if (resp.status === 402) {
+        toast({ variant: 'destructive', description: 'AI credits depleted. Please add credits.' });
+      }
+      throw new Error(errorData.error || 'Failed to start stream');
+    }
+
+    if (!resp.body) throw new Error('No response body');
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let textBuffer = '';
+    let streamDone = false;
+
+    while (!streamDone) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      textBuffer += decoder.decode(value, { stream: true });
+
+      let newlineIndex: number;
+      while ((newlineIndex = textBuffer.indexOf('\n')) !== -1) {
+        let line = textBuffer.slice(0, newlineIndex);
+        textBuffer = textBuffer.slice(newlineIndex + 1);
+
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        if (line.startsWith(':') || line.trim() === '') continue;
+        if (!line.startsWith('data: ')) continue;
+
+        const jsonStr = line.slice(6).trim();
+        if (jsonStr === '[DONE]') {
+          streamDone = true;
+          break;
+        }
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+          if (content) onDelta(content);
+        } catch {
+          textBuffer = line + '\n' + textBuffer;
+          break;
+        }
+      }
+    }
+
+    // Final flush
+    if (textBuffer.trim()) {
+      for (let raw of textBuffer.split('\n')) {
+        if (!raw) continue;
+        if (raw.endsWith('\r')) raw = raw.slice(0, -1);
+        if (raw.startsWith(':') || raw.trim() === '') continue;
+        if (!raw.startsWith('data: ')) continue;
+        const jsonStr = raw.slice(6).trim();
+        if (jsonStr === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+          if (content) onDelta(content);
+        } catch { /* ignore */ }
+      }
+    }
+
+    onDone();
+  }, [user?.id, conversationId, toast]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !user) return;
 
     const userMessage = input.trim();
     setInput('');
@@ -74,7 +165,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     let currentConversationId = conversationId;
 
     // Create new conversation if needed
-    if (!currentConversationId && user) {
+    if (!currentConversationId) {
       const { data: newConv } = await supabase
         .from('conversations')
         .insert({
@@ -90,7 +181,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
     }
 
-    // Add user message optimistically
+    // Add user message
     const tempUserMessage: Message = {
       id: 'temp-' + Date.now(),
       role: 'user',
@@ -100,7 +191,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setMessages(prev => [...prev, tempUserMessage]);
 
     // Save user message to database
-    if (currentConversationId && user) {
+    if (currentConversationId) {
       const { data: savedUserMsg } = await supabase
         .from('messages')
         .insert({
@@ -119,39 +210,75 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
     }
 
-    // Show typing indicator
-    setIsTyping(true);
+    // Start streaming
+    setIsStreaming(true);
+    let assistantContent = '';
+
+    const chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
+    chatHistory.push({ role: 'user', content: userMessage });
+
+    const updateAssistant = (chunk: string) => {
+      assistantContent += chunk;
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
+          return prev.map((m, i) => 
+            i === prev.length - 1 ? { ...m, content: assistantContent } : m
+          );
+        }
+        return [...prev, {
+          id: 'stream-' + Date.now(),
+          role: 'assistant' as const,
+          content: assistantContent,
+          created_at: new Date().toISOString(),
+        }];
+      });
+    };
 
     try {
-      // Call AI edge function
-      const response = await supabase.functions.invoke('phoenix-chat', {
-        body: {
-          message: userMessage,
-          conversationId: currentConversationId,
-          userId: user?.id,
-        },
-      });
+      await streamChat(
+        chatHistory,
+        updateAssistant,
+        async () => {
+          setIsStreaming(false);
+          setIsLoading(false);
 
-      if (response.data?.reply) {
-        const assistantMessage: Message = {
-          id: response.data.messageId || 'ai-' + Date.now(),
-          role: 'assistant',
-          content: response.data.reply,
-          created_at: new Date().toISOString(),
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      }
+          // Save assistant message to database
+          if (currentConversationId && assistantContent) {
+            const { data: savedAssistantMsg } = await supabase
+              .from('messages')
+              .insert({
+                conversation_id: currentConversationId,
+                user_id: user.id,
+                role: 'assistant',
+                content: assistantContent,
+              })
+              .select()
+              .single();
+
+            if (savedAssistantMsg) {
+              setMessages(prev =>
+                prev.map(m => m.id.startsWith('stream-') ? savedAssistantMsg as Message : m)
+              );
+            }
+
+            // Update conversation timestamp
+            await supabase
+              .from('conversations')
+              .update({ updated_at: new Date().toISOString() })
+              .eq('id', currentConversationId);
+          }
+        }
+      );
     } catch (error) {
-      console.error('Error calling AI:', error);
-      // Add error message
+      console.error('Streaming error:', error);
       setMessages(prev => [...prev, {
         id: 'error-' + Date.now(),
         role: 'assistant',
         content: 'I apologize, but I encountered an error. Please try again.',
         created_at: new Date().toISOString(),
       }]);
-    } finally {
-      setIsTyping(false);
+      setIsStreaming(false);
       setIsLoading(false);
     }
   };
@@ -164,7 +291,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleRating = async (messageId: string, rating: number) => {
-    if (!user || messageId.startsWith('temp-') || messageId.startsWith('error-')) return;
+    if (!user || messageId.startsWith('temp-') || messageId.startsWith('error-') || messageId.startsWith('stream-')) return;
 
     await supabase
       .from('messages')
@@ -175,7 +302,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       prev.map(m => m.id === messageId ? { ...m, rating } : m)
     );
 
-    // Store feedback for learning
     await supabase
       .from('feedback')
       .insert({
@@ -185,47 +311,45 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
   };
 
+  const commandSuggestions = [
+    { icon: '🔍', text: '/search latest AI news', label: 'Search the web' },
+    { icon: '📖', text: '/read https://example.com', label: 'Read a webpage' },
+    { icon: '📝', text: '/blog AI in healthcare', label: 'Write a blog post' },
+    { icon: '🐦', text: '/tweet productivity tips', label: 'Create a tweet' },
+  ];
+
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
-            <div className="w-20 h-20 rounded-2xl gradient-phoenix flex items-center justify-center mb-6 animate-float">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                className="w-10 h-10 text-primary-foreground"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              >
-                <path
-                  d="M12 2C12 2 9 6 9 10C9 14 12 16 12 16C12 16 15 14 15 10C15 6 12 2 12 2Z"
-                  fill="currentColor"
-                />
-                <path d="M12 16C12 16 8 18 6 22M12 16C12 16 16 18 18 22" strokeLinecap="round" />
-              </svg>
-            </div>
-            <h2 className="text-2xl font-bold mb-2 font-['Poppins']">
+            <PhoenixLoader size="lg" animate={false} />
+            <h2 className="text-2xl font-bold mb-2 font-['Poppins'] mt-6">
               Welcome to <span className="text-primary">Phoenix AI</span>
             </h2>
-            <p className="text-muted-foreground max-w-md">
+            <p className="text-muted-foreground max-w-md mb-2">
               Your intelligent assistant that learns from every conversation. 
-              Ask me anything, search the web, or let me help you create content.
+              Rising to every question, in real time.
             </p>
-            <div className="mt-8 grid grid-cols-2 gap-3 max-w-lg w-full">
-              {[
-                '🔍 Search the latest news',
-                '📝 Help me write a blog post',
-                '💡 Explain quantum computing',
-                '🎨 Generate creative ideas',
-              ].map((suggestion, i) => (
+            <p className="text-xs text-muted-foreground mb-8">
+              Created by <span className="text-primary">IYANU</span> & Phoenix Team
+            </p>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
+              {commandSuggestions.map((cmd, i) => (
                 <button
                   key={i}
-                  onClick={() => setInput(suggestion.slice(2).trim())}
-                  className="p-3 rounded-xl glass-card hover:bg-accent/50 transition-colors text-sm text-left"
+                  onClick={() => setInput(cmd.text)}
+                  className="p-4 rounded-xl glass-card hover:bg-accent/50 transition-all hover:scale-[1.02] text-left group"
                 >
-                  {suggestion}
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{cmd.icon}</span>
+                    <div>
+                      <p className="font-medium text-sm">{cmd.label}</p>
+                      <p className="text-xs text-muted-foreground font-mono">{cmd.text}</p>
+                    </div>
+                  </div>
                 </button>
               ))}
             </div>
@@ -237,9 +361,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 key={message.id}
                 message={message}
                 onRate={(rating) => handleRating(message.id, rating)}
+                isStreaming={isStreaming && message.id.startsWith('stream-')}
               />
             ))}
-            {isTyping && <TypingIndicator />}
+            {isLoading && !isStreaming && <TypingIndicator />}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -254,7 +379,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={user ? "Ask Phoenix anything..." : "Sign in to start chatting..."}
+              placeholder={user ? "Ask Phoenix anything... Try /search, /read, /blog, /tweet" : "Sign in to start chatting..."}
               disabled={!user || isLoading}
               className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-14 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
@@ -275,9 +400,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               )}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground text-center mt-2">
-            Phoenix AI learns from your feedback to provide better responses
-          </p>
+          <div className="flex items-center justify-center gap-2 mt-2">
+            <Sparkles className="h-3 w-3 text-primary" />
+            <p className="text-xs text-muted-foreground">
+              Phoenix AI learns from your feedback • Streaming responses enabled
+            </p>
+          </div>
         </form>
       </div>
     </div>

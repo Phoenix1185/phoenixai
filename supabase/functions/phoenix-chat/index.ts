@@ -13,22 +13,20 @@ interface UserPreferences {
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { message, conversationId, userId } = await req.json();
+    const { messages, conversationId, userId } = await req.json();
 
-    if (!message) {
+    if (!messages || messages.length === 0) {
       return new Response(
-        JSON.stringify({ error: 'Message is required' }),
+        JSON.stringify({ error: 'Messages are required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -45,7 +43,23 @@ Deno.serve(async (req) => {
     }
 
     // Build system prompt based on preferences
-    let systemPrompt = `You are Phoenix AI, an intelligent and adaptive assistant. You are helpful, accurate, and engaging.`;
+    let systemPrompt = `You are Phoenix AI, an intelligent and adaptive assistant created by IYANU and the Phoenix Team. You are helpful, accurate, engaging, and slightly witty.
+
+You have the following capabilities:
+- Answer questions with real-time knowledge
+- Generate content: blogs, tweets, summaries, reports
+- Explain complex topics clearly
+- Help with creative writing and brainstorming
+
+Commands you understand:
+- /search <topic> - Search the web for information
+- /read <URL> - Read and summarize a webpage
+- /blog <topic> - Generate a blog article
+- /tweet <topic> - Generate a social media post
+- /news <topic> - Get latest news summary
+- /crypto <symbol> - Get cryptocurrency info
+
+When users use commands, acknowledge the command and provide helpful responses based on your knowledge.`;
     
     if (preferences) {
       const styleMap: Record<string, string> = {
@@ -70,34 +84,17 @@ Deno.serve(async (req) => {
       const length = preferences.response_length || 'balanced';
       const expertise = preferences.expertise_level || 'intermediate';
 
-      systemPrompt += ` ${styleMap[style] || styleMap.casual}`;
-      systemPrompt += ` ${lengthMap[length] || lengthMap.balanced}`;
-      systemPrompt += ` ${expertiseMap[expertise] || expertiseMap.intermediate}`;
+      systemPrompt += `\n\nUser preferences:
+- ${styleMap[style] || styleMap.casual}
+- ${lengthMap[length] || lengthMap.balanced}
+- ${expertiseMap[expertise] || expertiseMap.intermediate}`;
       
       if (preferences.interests && preferences.interests.length > 0) {
-        systemPrompt += ` The user is interested in: ${preferences.interests.join(', ')}.`;
+        systemPrompt += `\n- The user is interested in: ${preferences.interests.join(', ')}.`;
       }
     }
 
-    // Get conversation history for context
-    let conversationHistory: { role: string; content: string }[] = [];
-    if (conversationId) {
-      const { data: messages } = await supabase
-        .from('messages')
-        .select('role, content')
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true })
-        .limit(20);
-      
-      if (messages) {
-        conversationHistory = messages.map((m: { role: string; content: string }) => ({
-          role: m.role,
-          content: m.content,
-        }));
-      }
-    }
-
-    // Call Lovable AI Gateway
+    // Call Lovable AI Gateway with streaming
     const aiGatewayUrl = 'https://ai.gateway.lovable.dev/v1/chat/completions';
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
 
@@ -115,10 +112,9 @@ Deno.serve(async (req) => {
         model: 'google/gemini-3-flash-preview',
         messages: [
           { role: 'system', content: systemPrompt },
-          ...conversationHistory,
-          { role: 'user', content: message },
+          ...messages,
         ],
-        max_tokens: 2048,
+        stream: true,
       }),
     });
 
@@ -140,36 +136,10 @@ Deno.serve(async (req) => {
       throw new Error('Failed to get AI response');
     }
 
-    const aiData = await aiResponse.json();
-    const reply = aiData.choices?.[0]?.message?.content || 'I apologize, but I could not generate a response.';
-
-    // Save assistant message to database
-    let messageId = null;
-    if (conversationId && userId) {
-      const { data: savedMsg } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: conversationId,
-          user_id: userId,
-          role: 'assistant',
-          content: reply,
-        })
-        .select('id')
-        .single();
-      
-      messageId = savedMsg?.id;
-
-      // Update conversation timestamp
-      await supabase
-        .from('conversations')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', conversationId);
-    }
-
-    return new Response(
-      JSON.stringify({ reply, messageId }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // Return streaming response
+    return new Response(aiResponse.body, {
+      headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
+    });
   } catch (error: unknown) {
     console.error('Error in phoenix-chat:', error);
     const errorMessage = error instanceof Error ? error.message : 'Internal server error';
