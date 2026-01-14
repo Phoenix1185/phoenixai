@@ -13,7 +13,14 @@ interface UserPreferences {
   language: string;
 }
 
-interface SearchResult {
+interface TavilyResult {
+  url: string;
+  title: string;
+  content: string;
+  score: number;
+}
+
+interface FirecrawlResult {
   url: string;
   title: string;
   description: string;
@@ -37,6 +44,11 @@ function needsWebSearch(message: string): { needed: boolean; query: string } {
     /(what|who|when|where|how) .* (today|right now|currently|2024|2025|2026)/i,
     /crypto(currency)? (price|market)/i,
     /\b(bitcoin|btc|ethereum|eth)\b.*(price|worth|value)/i,
+    /latest .*/i,
+    /current .*/i,
+    /recent .*/i,
+    /trending/i,
+    /happening (now|today|right now)/i,
   ];
   
   for (const pattern of patterns) {
@@ -60,7 +72,47 @@ function extractUrl(message: string): string | null {
   return matches ? matches[0] : null;
 }
 
-async function performWebSearch(query: string): Promise<SearchResult[]> {
+// Tavily Search - Primary search engine (more up-to-date)
+async function performTavilySearch(query: string): Promise<TavilyResult[]> {
+  const apiKey = Deno.env.get('TAVILY_API_KEY');
+  if (!apiKey) {
+    console.log('Tavily API key not configured, falling back to Firecrawl');
+    return [];
+  }
+
+  try {
+    console.log('Performing Tavily search for:', query);
+    const response = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        search_depth: 'advanced',
+        include_answer: true,
+        include_raw_content: false,
+        max_results: 5,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Tavily search failed:', response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    console.log('Tavily returned', data.results?.length || 0, 'results');
+    return data.results || [];
+  } catch (error) {
+    console.error('Tavily search error:', error);
+    return [];
+  }
+}
+
+// Firecrawl Search - Fallback search
+async function performFirecrawlSearch(query: string): Promise<FirecrawlResult[]> {
   const apiKey = Deno.env.get('FIRECRAWL_API_KEY');
   if (!apiKey) {
     console.log('Firecrawl API key not configured, skipping search');
@@ -94,6 +146,43 @@ async function performWebSearch(query: string): Promise<SearchResult[]> {
     console.error('Web search error:', error);
     return [];
   }
+}
+
+// Combined search - try Tavily first, fallback to Firecrawl
+async function performWebSearch(query: string): Promise<string> {
+  // Try Tavily first (more up-to-date)
+  const tavilyResults = await performTavilySearch(query);
+  
+  if (tavilyResults.length > 0) {
+    let context = '\n\n🔍 **Live Web Search Results (Tavily - Real-time):**\n\n';
+    for (const result of tavilyResults) {
+      context += `### ${result.title}\n`;
+      context += `*Source: ${result.url}*\n\n`;
+      const content = result.content.length > 2000 ? result.content.slice(0, 2000) + '...' : result.content;
+      context += `${content}\n\n---\n\n`;
+    }
+    return context;
+  }
+  
+  // Fallback to Firecrawl
+  const firecrawlResults = await performFirecrawlSearch(query);
+  
+  if (firecrawlResults.length > 0) {
+    let context = '\n\n🔍 **Live Web Search Results:**\n\n';
+    for (const result of firecrawlResults) {
+      context += `### ${result.title}\n`;
+      context += `*Source: ${result.url}*\n\n`;
+      if (result.markdown) {
+        const truncated = result.markdown.length > 1500 ? result.markdown.slice(0, 1500) + '...' : result.markdown;
+        context += `${truncated}\n\n---\n\n`;
+      } else if (result.description) {
+        context += `${result.description}\n\n---\n\n`;
+      }
+    }
+    return context;
+  }
+  
+  return '';
 }
 
 async function scrapeUrl(url: string): Promise<string | null> {
@@ -149,58 +238,40 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get user preferences for personalization
-    let preferences: UserPreferences | null = null;
-    if (userId) {
-      const { data } = await supabase
-        .from('user_preferences')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle();
-      preferences = data as UserPreferences | null;
-    }
-
-    // Get the latest user message
+    // Get user preferences for personalization (parallel with search check)
     const lastUserMessage = messages[messages.length - 1]?.content || '';
-    
-    // Check if we need to search the web or scrape a URL
-    let webContext = '';
     const urlToRead = extractUrl(lastUserMessage);
     const searchCheck = needsWebSearch(lastUserMessage);
+
+    // Parallel fetch: preferences and web data
+    const preferencesPromise = userId 
+      ? supabase.from('user_preferences').select('*').eq('user_id', userId).maybeSingle()
+      : Promise.resolve({ data: null });
     
-    if (urlToRead) {
-      console.log('Detected URL to scrape:', urlToRead);
-      const content = await scrapeUrl(urlToRead);
-      if (content) {
-        // Truncate if too long
-        const truncated = content.length > 8000 ? content.slice(0, 8000) + '...\n[Content truncated]' : content;
-        webContext = `\n\n📄 **Content from ${urlToRead}:**\n\n${truncated}`;
-      }
-    } else if (searchCheck.needed) {
-      console.log('Performing web search for:', searchCheck.query);
-      const results = await performWebSearch(searchCheck.query);
-      if (results.length > 0) {
-        webContext = '\n\n🔍 **Live Web Search Results:**\n\n';
-        for (const result of results) {
-          webContext += `### ${result.title}\n`;
-          webContext += `*Source: ${result.url}*\n\n`;
-          if (result.markdown) {
-            const truncated = result.markdown.length > 1500 ? result.markdown.slice(0, 1500) + '...' : result.markdown;
-            webContext += `${truncated}\n\n---\n\n`;
-          } else if (result.description) {
-            webContext += `${result.description}\n\n---\n\n`;
+    const webContextPromise = urlToRead
+      ? scrapeUrl(urlToRead).then(content => {
+          if (content) {
+            const truncated = content.length > 10000 ? content.slice(0, 10000) + '...\n[Content truncated]' : content;
+            return `\n\n📄 **Content from ${urlToRead}:**\n\n${truncated}`;
           }
-        }
-      }
-    }
+          return '';
+        })
+      : searchCheck.needed
+        ? performWebSearch(searchCheck.query)
+        : Promise.resolve('');
+
+    const [preferencesResult, webContext] = await Promise.all([preferencesPromise, webContextPromise]);
+    const preferences = preferencesResult.data as UserPreferences | null;
 
     // Build system prompt based on preferences
     let systemPrompt = `You are Phoenix AI, an intelligent and adaptive personal assistant created by IYANU and the Phoenix Team. You are helpful, accurate, engaging, and slightly witty.
 
 Your tagline is: "Rising to every question, in real time."
 
+Current date: ${new Date().toISOString().split('T')[0]}
+
 Your core capabilities:
-- Answer questions with up-to-date knowledge (you have access to live web search)
+- Answer questions with up-to-date knowledge (you have access to live web search via Tavily)
 - Generate content: blogs, tweets, summaries, reports, SEO content
 - Read and summarize web pages when users share URLs
 - Explain complex topics clearly at the user's level
@@ -211,9 +282,11 @@ IMPORTANT BEHAVIOR:
 - You understand natural language - users don't need special commands
 - When users ask about current events, news, or real-time information, you CAN access live web data
 - When users share a URL, you CAN read and summarize the content
-- Always cite your sources when using web search results
+- Always cite your sources when using web search results with clickable links
 - Be conversational and helpful, adapt to the user's communication style
 - If you used web search, mention that you searched for updated information
+- NEVER truncate or cut off your responses. Always provide complete information.
+- Format responses nicely with headers, bullet points, and proper spacing for readability.
 
 IMPORTANT: Always respond in the user's preferred language.`;
     
@@ -227,7 +300,7 @@ IMPORTANT: Always respond in the user's preferred language.`;
       const lengthMap: Record<string, string> = {
         concise: 'Keep responses brief and to the point.',
         balanced: 'Provide balanced responses with appropriate detail.',
-        detailed: 'Provide thorough, comprehensive responses.',
+        detailed: 'Provide thorough, comprehensive responses with full details.',
       };
       
       const expertiseMap: Record<string, string> = {
@@ -289,6 +362,7 @@ IMPORTANT: Always respond in the user's preferred language.`;
           ...processedMessages,
         ],
         stream: true,
+        max_tokens: 4096, // Increase token limit to prevent cutoffs
       }),
     });
 
