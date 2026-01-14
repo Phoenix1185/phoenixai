@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Copy, ThumbsUp, ThumbsDown, Check, Loader2 } from 'lucide-react';
+import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface Message {
   id: string;
@@ -15,10 +16,18 @@ interface Message {
 interface ChatMessageProps {
   message: Message;
   onRate: (rating: number) => void;
+  onSpeak?: (content: string) => void;
+  isSpeaking?: boolean;
   isStreaming?: boolean;
 }
 
-const ChatMessage: React.FC<ChatMessageProps> = ({ message, onRate, isStreaming = false }) => {
+const ChatMessage: React.FC<ChatMessageProps> = ({ 
+  message, 
+  onRate, 
+  onSpeak,
+  isSpeaking = false,
+  isStreaming = false 
+}) => {
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
   const isUser = message.role === 'user';
@@ -33,7 +42,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message, onRate, isStreaming 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Enhanced markdown rendering
+  // Enhanced markdown rendering with better list support
   const renderContent = (content: string) => {
     const parts = content.split(/(```[\s\S]*?```)/g);
     
@@ -58,42 +67,92 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message, onRate, isStreaming 
       
       return (
         <span key={i} className="whitespace-pre-wrap">
-          {part.split('\n').map((line, j) => (
-            <React.Fragment key={j}>
-              {j > 0 && <br />}
-              {line.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`|#{1,3}\s.*)/g).map((segment, k) => {
-                // Headers
-                if (segment.match(/^###\s/)) {
-                  return <strong key={k} className="text-base block mt-3 mb-1">{segment.slice(4)}</strong>;
-                }
-                if (segment.match(/^##\s/)) {
-                  return <strong key={k} className="text-lg block mt-4 mb-2">{segment.slice(3)}</strong>;
-                }
-                if (segment.match(/^#\s/)) {
-                  return <strong key={k} className="text-xl block mt-4 mb-2">{segment.slice(2)}</strong>;
-                }
-                // Bold
-                if (segment.startsWith('**') && segment.endsWith('**')) {
-                  return <strong key={k}>{segment.slice(2, -2)}</strong>;
-                }
-                // Italic
-                if (segment.startsWith('*') && segment.endsWith('*')) {
-                  return <em key={k}>{segment.slice(1, -1)}</em>;
-                }
-                // Inline code
-                if (segment.startsWith('`') && segment.endsWith('`')) {
-                  return (
-                    <code key={k} className="px-1.5 py-0.5 rounded bg-muted font-mono text-sm text-primary">
-                      {segment.slice(1, -1)}
-                    </code>
-                  );
-                }
-                return segment;
-              })}
-            </React.Fragment>
-          ))}
+          {part.split('\n').map((line, j) => {
+            // Check for bullet points
+            if (line.match(/^[-*•]\s/)) {
+              return (
+                <React.Fragment key={j}>
+                  {j > 0 && <br />}
+                  <span className="flex items-start gap-2">
+                    <span className="text-primary">•</span>
+                    <span>{renderInlineFormatting(line.replace(/^[-*•]\s/, ''))}</span>
+                  </span>
+                </React.Fragment>
+              );
+            }
+            
+            // Check for numbered lists
+            if (line.match(/^\d+\.\s/)) {
+              const match = line.match(/^(\d+)\.\s(.*)$/);
+              if (match) {
+                return (
+                  <React.Fragment key={j}>
+                    {j > 0 && <br />}
+                    <span className="flex items-start gap-2">
+                      <span className="text-primary font-medium">{match[1]}.</span>
+                      <span>{renderInlineFormatting(match[2])}</span>
+                    </span>
+                  </React.Fragment>
+                );
+              }
+            }
+            
+            return (
+              <React.Fragment key={j}>
+                {j > 0 && <br />}
+                {renderInlineFormatting(line)}
+              </React.Fragment>
+            );
+          })}
         </span>
       );
+    });
+  };
+
+  const renderInlineFormatting = (text: string) => {
+    return text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`|#{1,3}\s.*|\[.*?\]\(.*?\))/g).map((segment, k) => {
+      // Headers
+      if (segment.match(/^###\s/)) {
+        return <strong key={k} className="text-base block mt-3 mb-1">{segment.slice(4)}</strong>;
+      }
+      if (segment.match(/^##\s/)) {
+        return <strong key={k} className="text-lg block mt-4 mb-2">{segment.slice(3)}</strong>;
+      }
+      if (segment.match(/^#\s/)) {
+        return <strong key={k} className="text-xl block mt-4 mb-2">{segment.slice(2)}</strong>;
+      }
+      // Links
+      const linkMatch = segment.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkMatch) {
+        return (
+          <a 
+            key={k} 
+            href={linkMatch[2]} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {linkMatch[1]}
+          </a>
+        );
+      }
+      // Bold
+      if (segment.startsWith('**') && segment.endsWith('**')) {
+        return <strong key={k}>{segment.slice(2, -2)}</strong>;
+      }
+      // Italic
+      if (segment.startsWith('*') && segment.endsWith('*')) {
+        return <em key={k}>{segment.slice(1, -1)}</em>;
+      }
+      // Inline code
+      if (segment.startsWith('`') && segment.endsWith('`')) {
+        return (
+          <code key={k} className="px-1.5 py-0.5 rounded bg-muted font-mono text-sm text-primary">
+            {segment.slice(1, -1)}
+          </code>
+        );
+      }
+      return segment;
     });
   };
 
@@ -134,40 +193,77 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message, onRate, isStreaming 
         <div className="text-sm leading-relaxed">
           {renderContent(message.content)}
           {isStreaming && (
-            <span className="inline-block w-2 h-4 bg-primary ml-1 animate-pulse rounded-sm" />
+            <span className="inline-block w-2 h-5 bg-primary ml-1 animate-pulse rounded-sm" />
           )}
         </div>
 
         {!isUser && !isStreaming && message.content && (
           <div className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 hover:bg-accent"
-              onClick={copyToClipboard}
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5 text-green-500" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" />
-              )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn('h-7 w-7 hover:bg-accent', message.rating === 1 && 'text-green-500 bg-green-500/10')}
-              onClick={() => onRate(1)}
-            >
-              <ThumbsUp className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn('h-7 w-7 hover:bg-accent', message.rating === -1 && 'text-destructive bg-destructive/10')}
-              onClick={() => onRate(-1)}
-            >
-              <ThumbsDown className="h-3.5 w-3.5" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 hover:bg-accent"
+                  onClick={copyToClipboard}
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-green-500" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy</TooltipContent>
+            </Tooltip>
+            
+            {onSpeak && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn('h-7 w-7 hover:bg-accent', isSpeaking && 'text-primary bg-primary/10')}
+                    onClick={() => onSpeak(message.content)}
+                  >
+                    {isSpeaking ? (
+                      <VolumeX className="h-3.5 w-3.5" />
+                    ) : (
+                      <Volume2 className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isSpeaking ? 'Stop' : 'Read aloud'}</TooltipContent>
+              </Tooltip>
+            )}
+            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('h-7 w-7 hover:bg-accent', message.rating === 1 && 'text-green-500 bg-green-500/10')}
+                  onClick={() => onRate(1)}
+                >
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Good response</TooltipContent>
+            </Tooltip>
+            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('h-7 w-7 hover:bg-accent', message.rating === -1 && 'text-destructive bg-destructive/10')}
+                  onClick={() => onRate(-1)}
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Poor response</TooltipContent>
+            </Tooltip>
           </div>
         )}
       </div>
