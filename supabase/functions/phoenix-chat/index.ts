@@ -5,6 +5,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+interface UserPreferences {
+  preferred_style: 'formal' | 'casual' | 'witty';
+  response_length: 'concise' | 'balanced' | 'detailed';
+  expertise_level: 'beginner' | 'intermediate' | 'expert';
+  interests: string[];
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -27,41 +34,45 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Get user preferences for personalization
-    let preferences = null;
+    let preferences: UserPreferences | null = null;
     if (userId) {
       const { data } = await supabase
         .from('user_preferences')
         .select('*')
         .eq('user_id', userId)
         .maybeSingle();
-      preferences = data;
+      preferences = data as UserPreferences | null;
     }
 
     // Build system prompt based on preferences
     let systemPrompt = `You are Phoenix AI, an intelligent and adaptive assistant. You are helpful, accurate, and engaging.`;
     
     if (preferences) {
-      const styleMap = {
+      const styleMap: Record<string, string> = {
         formal: 'Respond in a formal, professional manner.',
         casual: 'Respond in a casual, friendly manner.',
         witty: 'Respond in a witty, playful manner with occasional humor.',
       };
       
-      const lengthMap = {
+      const lengthMap: Record<string, string> = {
         concise: 'Keep responses brief and to the point.',
         balanced: 'Provide balanced responses with appropriate detail.',
         detailed: 'Provide thorough, comprehensive responses.',
       };
       
-      const expertiseMap = {
+      const expertiseMap: Record<string, string> = {
         beginner: 'Explain concepts simply, avoid jargon.',
         intermediate: 'Use moderate technical language when appropriate.',
         expert: 'Feel free to use technical terms and assume domain knowledge.',
       };
 
-      systemPrompt += ` ${styleMap[preferences.preferred_style] || styleMap.casual}`;
-      systemPrompt += ` ${lengthMap[preferences.response_length] || lengthMap.balanced}`;
-      systemPrompt += ` ${expertiseMap[preferences.expertise_level] || expertiseMap.intermediate}`;
+      const style = preferences.preferred_style || 'casual';
+      const length = preferences.response_length || 'balanced';
+      const expertise = preferences.expertise_level || 'intermediate';
+
+      systemPrompt += ` ${styleMap[style] || styleMap.casual}`;
+      systemPrompt += ` ${lengthMap[length] || lengthMap.balanced}`;
+      systemPrompt += ` ${expertiseMap[expertise] || expertiseMap.intermediate}`;
       
       if (preferences.interests && preferences.interests.length > 0) {
         systemPrompt += ` The user is interested in: ${preferences.interests.join(', ')}.`;
@@ -79,7 +90,7 @@ Deno.serve(async (req) => {
         .limit(20);
       
       if (messages) {
-        conversationHistory = messages.map(m => ({
+        conversationHistory = messages.map((m: { role: string; content: string }) => ({
           role: m.role,
           content: m.content,
         }));
@@ -101,7 +112,7 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: 'google/gemini-3-flash-preview',
         messages: [
           { role: 'system', content: systemPrompt },
           ...conversationHistory,
@@ -112,8 +123,20 @@ Deno.serve(async (req) => {
     });
 
     if (!aiResponse.ok) {
+      if (aiResponse.status === 429) {
+        return new Response(
+          JSON.stringify({ error: 'Rate limit exceeded. Please try again in a moment.' }),
+          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (aiResponse.status === 402) {
+        return new Response(
+          JSON.stringify({ error: 'AI credits depleted. Please add credits to continue.' }),
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
       const errorText = await aiResponse.text();
-      console.error('AI Gateway error:', errorText);
+      console.error('AI Gateway error:', aiResponse.status, errorText);
       throw new Error('Failed to get AI response');
     }
 
@@ -147,10 +170,11 @@ Deno.serve(async (req) => {
       JSON.stringify({ reply, messageId }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error in phoenix-chat:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Internal server error';
     return new Response(
-      JSON.stringify({ error: error.message || 'Internal server error' }),
+      JSON.stringify({ error: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
