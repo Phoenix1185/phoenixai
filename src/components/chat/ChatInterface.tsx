@@ -6,6 +6,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import ChatMessage from './ChatMessage';
 import TypingIndicator from './TypingIndicator';
+import StreamingIndicator from './StreamingIndicator';
+import QuickActions from './QuickActions';
 import PhoenixLoader from './PhoenixLoader';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -381,12 +383,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  const examplePrompts = [
-    { icon: '🔍', text: 'What are the latest news in AI?', label: 'Latest AI news' },
-    { icon: '📖', text: 'Summarize this article for me', label: 'Summarize content' },
-    { icon: '📝', text: 'Write a blog post about productivity', label: 'Write a blog post' },
-    { icon: '💡', text: 'Give me startup ideas for 2025', label: 'Generate ideas' },
-  ];
+  const handleQuickAction = (prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -406,23 +406,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               Created by <span className="text-primary">IYANU</span> & Phoenix Team
             </p>
             
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
-              {examplePrompts.map((cmd, i) => (
-                <button
-                  key={i}
-                  onClick={() => setInput(cmd.text)}
-                  className="p-4 rounded-xl glass-card hover:bg-accent/50 transition-all hover:scale-[1.02] text-left group"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{cmd.icon}</span>
-                    <div>
-                      <p className="font-medium text-sm">{cmd.label}</p>
-                      <p className="text-xs text-muted-foreground">{cmd.text}</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
+            <QuickActions onSelect={handleQuickAction} />
           </div>
         ) : (
           <div className="space-y-4 max-w-4xl mx-auto">
@@ -500,10 +484,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
           </div>
           <div className="flex items-center justify-center gap-2 mt-2">
-            <Sparkles className="h-3 w-3 text-primary" />
-            <p className="text-xs text-muted-foreground">
-              Phoenix AI with live web search • {voiceInputSupported ? 'Voice enabled' : 'Voice not supported'}
-            </p>
+            {isStreaming ? (
+              <StreamingIndicator text="Phoenix is typing..." />
+            ) : (
+              <>
+                <Sparkles className="h-3 w-3 text-primary" />
+                <p className="text-xs text-muted-foreground">
+                  Phoenix AI with live web search • {voiceInputSupported ? 'Voice enabled' : 'Voice not supported'}
+                </p>
+              </>
+            )}
           </div>
         </form>
       </div>
