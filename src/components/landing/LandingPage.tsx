@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import { ArrowRight, Globe, Brain, Zap, MessageCircle, Search, Sparkles, Shield, Mic, Languages, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -17,93 +17,102 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
   const bgY = useTransform(scrollY, [0, 500], [0, -50]);
   const opacity = useTransform(scrollY, [0, 300], [1, 0.3]);
 
-  // Track mouse for interactive effects
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+  // Debounced mouse tracking for better performance
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    // Only update every 100ms via requestAnimationFrame
+    requestAnimationFrame(() => {
       setMousePosition({
-        x: (e.clientX / window.innerWidth - 0.5) * 20,
-        y: (e.clientY / window.innerHeight - 0.5) * 20,
+        x: (e.clientX / window.innerWidth - 0.5) * 15,
+        y: (e.clientY / window.innerHeight - 0.5) * 15,
       });
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
+    });
   }, []);
 
-  const features = [
+  useEffect(() => {
+    let throttleTimeout: number | null = null;
+    const throttledHandler = (e: MouseEvent) => {
+      if (throttleTimeout) return;
+      throttleTimeout = window.setTimeout(() => {
+        handleMouseMove(e);
+        throttleTimeout = null;
+      }, 100);
+    };
+    
+    window.addEventListener('mousemove', throttledHandler, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', throttledHandler);
+      if (throttleTimeout) window.clearTimeout(throttleTimeout);
+    };
+  }, [handleMouseMove]);
+
+  const features = useMemo(() => [
     { icon: Brain, title: 'Intelligent AI', description: 'Powered by advanced AI that learns your preferences' },
     { icon: Search, title: 'Live Web Search', description: 'Real-time access to current information via Tavily' },
     { icon: Globe, title: 'Multi-Language', description: 'Communicate in 10+ languages seamlessly' },
     { icon: Zap, title: 'Lightning Fast', description: 'Streaming responses in real-time' },
     { icon: Mic, title: 'Voice Enabled', description: 'Speak naturally with voice input & output' },
     { icon: MessageSquare, title: 'WhatsApp Ready', description: 'Connect via WhatsApp for on-the-go AI' },
-  ];
+  ], []);
 
-  const stats = [
+  const stats = useMemo(() => [
     { value: '10+', label: 'Languages' },
     { value: '24/7', label: 'Availability' },
     { value: 'Real-time', label: 'Web Search' },
     { value: '∞', label: 'Possibilities' },
-  ];
+  ], []);
+
+  // Memoized particles - reduced from 20 to 6 for performance
+  const particles = useMemo(() => 
+    [...Array(6)].map((_, i) => ({
+      id: i,
+      left: `${Math.random() * 100}%`,
+      top: `${Math.random() * 100}%`,
+      duration: 5 + Math.random() * 3,
+      delay: Math.random() * 2,
+    })), []);
 
   return (
     <div className="min-h-screen flex flex-col bg-background overflow-hidden relative">
-      {/* Animated background elements with parallax */}
+      {/* Optimized animated background */}
       <motion.div 
         style={{ y: bgY }}
-        className="absolute inset-0 overflow-hidden pointer-events-none"
+        className="absolute inset-0 overflow-hidden pointer-events-none will-change-transform"
       >
-        {/* Floating particles */}
-        {[...Array(20)].map((_, i) => (
+        {/* Reduced floating particles */}
+        {particles.map((particle) => (
           <motion.div
-            key={i}
+            key={particle.id}
             className="absolute w-2 h-2 rounded-full bg-primary/20"
-            style={{
-              left: `${Math.random() * 100}%`,
-              top: `${Math.random() * 100}%`,
-            }}
+            style={{ left: particle.left, top: particle.top }}
             animate={{
-              y: [-20, 20, -20],
-              x: [-10, 10, -10],
-              opacity: [0.2, 0.5, 0.2],
-              scale: [0.8, 1.2, 0.8],
+              y: [-15, 15, -15],
+              opacity: [0.2, 0.4, 0.2],
             }}
             transition={{
-              duration: 4 + Math.random() * 4,
+              duration: particle.duration,
               repeat: Infinity,
-              delay: Math.random() * 2,
+              delay: particle.delay,
               ease: "easeInOut",
             }}
           />
         ))}
 
-        <motion.div
-          animate={{ 
-            scale: [1, 1.1, 1],
-            opacity: [0.4, 0.7, 0.4],
-            x: mousePosition.x * 0.5,
-            y: mousePosition.y * 0.5,
-          }}
-          transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute top-1/4 -left-32 w-[500px] h-[500px] bg-primary/20 rounded-full blur-3xl"
-        />
-        <motion.div
-          animate={{ 
-            scale: [1, 1.15, 1],
-            opacity: [0.4, 0.6, 0.4],
-            x: mousePosition.x * -0.3,
-            y: mousePosition.y * -0.3,
-          }}
-          transition={{ duration: 5, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-          className="absolute bottom-1/4 -right-32 w-[500px] h-[500px] bg-orange-500/20 rounded-full blur-3xl"
-        />
+        {/* Simplified background blurs - removed mouse tracking for large elements */}
         <motion.div
           animate={{ 
             scale: [1, 1.05, 1],
-            opacity: [0.2, 0.4, 0.2],
-            rotate: [0, 180, 360],
+            opacity: [0.3, 0.5, 0.3],
           }}
-          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-amber-500/10 rounded-full blur-3xl"
+          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute top-1/4 -left-32 w-[400px] h-[400px] bg-primary/15 rounded-full blur-3xl will-change-transform"
+        />
+        <motion.div
+          animate={{ 
+            scale: [1, 1.08, 1],
+            opacity: [0.3, 0.45, 0.3],
+          }}
+          transition={{ duration: 7, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+          className="absolute bottom-1/4 -right-32 w-[400px] h-[400px] bg-orange-500/15 rounded-full blur-3xl will-change-transform"
         />
       </motion.div>
 
