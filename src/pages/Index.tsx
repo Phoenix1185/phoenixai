@@ -123,7 +123,7 @@ const Index: React.FC = () => {
               initial={{ y: -20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.2, duration: 0.5 }}
-              className="h-14 border-b border-border flex items-center justify-between px-4"
+              className="sticky top-0 z-50 h-14 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center justify-between px-4"
             >
               <div className="flex items-center gap-2">
                 <SidebarTrigger className="md:hidden" />

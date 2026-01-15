@@ -43,8 +43,50 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Enhanced markdown rendering with better list support
-  const renderContent = (content: string) => {
+  const renderInlineFormatting = (text: string) => {
+    return text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`|#{1,3}\s.*|\[.*?\]\(.*?\))/g).map((segment, k) => {
+      if (segment.match(/^###\s/)) {
+        return <strong key={k} className="text-base block mt-3 mb-1">{segment.slice(4)}</strong>;
+      }
+      if (segment.match(/^##\s/)) {
+        return <strong key={k} className="text-lg block mt-4 mb-2">{segment.slice(3)}</strong>;
+      }
+      if (segment.match(/^#\s/)) {
+        return <strong key={k} className="text-xl block mt-4 mb-2">{segment.slice(2)}</strong>;
+      }
+      const linkMatch = segment.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkMatch) {
+        return (
+          <a 
+            key={k} 
+            href={linkMatch[2]} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-primary hover:underline inline-flex items-center gap-1"
+          >
+            {linkMatch[1]}
+            <span className="text-xs">↗</span>
+          </a>
+        );
+      }
+      if (segment.startsWith('**') && segment.endsWith('**')) {
+        return <strong key={k}>{segment.slice(2, -2)}</strong>;
+      }
+      if (segment.startsWith('*') && segment.endsWith('*')) {
+        return <em key={k}>{segment.slice(1, -1)}</em>;
+      }
+      if (segment.startsWith('`') && segment.endsWith('`')) {
+        return (
+          <code key={k} className="px-1.5 py-0.5 rounded bg-muted font-mono text-sm text-primary">
+            {segment.slice(1, -1)}
+          </code>
+        );
+      }
+      return segment;
+    });
+  };
+
+  const renderTextContent = (content: string) => {
     const parts = content.split(/(```[\s\S]*?```)/g);
     
     return parts.map((part, i) => {
@@ -69,7 +111,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       return (
         <span key={i} className="whitespace-pre-wrap">
           {part.split('\n').map((line, j) => {
-            // Check for bullet points
             if (line.match(/^[-*•]\s/)) {
               return (
                 <React.Fragment key={j}>
@@ -82,7 +123,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
               );
             }
             
-            // Check for numbered lists
             if (line.match(/^\d+\.\s/)) {
               const match = line.match(/^(\d+)\.\s(.*)$/);
               if (match) {
@@ -110,191 +150,65 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     });
   };
 
-  const renderInlineFormatting = (text: string) => {
-    return text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`|#{1,3}\s.*|\[.*?\]\(.*?\))/g).map((segment, k) => {
-      // Headers
-      if (segment.match(/^###\s/)) {
-        return <strong key={k} className="text-base block mt-3 mb-1">{segment.slice(4)}</strong>;
+  const renderContent = (content: string) => {
+    const imageRegex = /!\[([^\]]*)\]\((data:image\/[^;]+;base64,[^\)]+)\)/g;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = imageRegex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(<span key={`text-${lastIndex}`}>{renderTextContent(content.slice(lastIndex, match.index))}</span>);
       }
-      if (segment.match(/^##\s/)) {
-        return <strong key={k} className="text-lg block mt-4 mb-2">{segment.slice(3)}</strong>;
-      }
-      if (segment.match(/^#\s/)) {
-        return <strong key={k} className="text-xl block mt-4 mb-2">{segment.slice(2)}</strong>;
-      }
-      // Links
-      const linkMatch = segment.match(/\[([^\]]+)\]\(([^)]+)\)/);
-      if (linkMatch) {
-        return (
-          <a 
-            key={k} 
-            href={linkMatch[2]} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-primary hover:underline inline-flex items-center gap-1"
-          >
-            {linkMatch[1]}
-            <span className="text-xs">↗</span>
-          </a>
-        );
-      }
-      // Bold
-      if (segment.startsWith('**') && segment.endsWith('**')) {
-        return <strong key={k}>{segment.slice(2, -2)}</strong>;
-      }
-      // Italic
-      if (segment.startsWith('*') && segment.endsWith('*')) {
-        return <em key={k}>{segment.slice(1, -1)}</em>;
-      }
-      // Inline code
-      if (segment.startsWith('`') && segment.endsWith('`')) {
-        return (
-          <code key={k} className="px-1.5 py-0.5 rounded bg-muted font-mono text-sm text-primary">
-            {segment.slice(1, -1)}
-          </code>
-        );
-      }
-      return segment;
-    });
+      
+      const alt = match[1] || 'Generated Image';
+      const src = match[2];
+      parts.push(
+        <div key={`img-${match.index}`} className="my-4">
+          <img src={src} alt={alt} className="max-w-full rounded-lg shadow-lg cursor-pointer hover:scale-[1.02] transition-transform" onClick={() => window.open(src, '_blank')} />
+          <Button variant="ghost" size="sm" className="text-xs mt-2" onClick={() => { const link = document.createElement('a'); link.href = src; link.download = 'phoenix-image.png'; link.click(); }}>
+            📥 Download
+          </Button>
+        </div>
+      );
+      lastIndex = match.index + match[0].length;
+    }
+    
+    if (lastIndex < content.length) {
+      parts.push(<span key="text-end">{renderTextContent(content.slice(lastIndex))}</span>);
+    }
+    
+    return parts.length > 0 ? parts : renderTextContent(content);
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-      className={cn(
-        'flex gap-3',
-        isUser ? 'justify-end' : 'justify-start'
-      )}
-    >
+    <motion.div initial={{ opacity: 0, y: 10, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.3, ease: "easeOut" }} className={cn('flex gap-3', isUser ? 'justify-end' : 'justify-start')}>
       {!isUser && (
-        <motion.div 
-          animate={isStreaming ? { 
-            scale: [1, 1.1, 1],
-            rotate: [0, 5, -5, 0]
-          } : {}}
-          transition={{ duration: 1.5, repeat: isStreaming ? Infinity : 0 }}
-          className="w-8 h-8 rounded-lg gradient-phoenix flex items-center justify-center shrink-0 shadow-lg"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            className={cn(
-              'w-4 h-4 text-primary-foreground',
-              isStreaming && 'animate-phoenix-wings'
-            )}
-          >
-            <path
-              d="M12 2C12 2 9 6 9 10C9 14 12 16 12 16C12 16 15 14 15 10C15 6 12 2 12 2Z"
-              fill="currentColor"
-            />
+        <motion.div animate={isStreaming ? { scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] } : {}} transition={{ duration: 1.5, repeat: isStreaming ? Infinity : 0 }} className="w-8 h-8 rounded-lg gradient-phoenix flex items-center justify-center shrink-0 shadow-lg">
+          <svg viewBox="0 0 24 24" fill="none" className={cn('w-4 h-4 text-primary-foreground', isStreaming && 'animate-phoenix-wings')}>
+            <path d="M12 2C12 2 9 6 9 10C9 14 12 16 12 16C12 16 15 14 15 10C15 6 12 2 12 2Z" fill="currentColor" />
             <path d="M12 16C12 16 8 18 6 22M12 16C12 16 16 18 18 22" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </motion.div>
       )}
 
-      <motion.div
-        layout
-        className={cn(
-          'max-w-[80%] rounded-2xl px-4 py-3 shadow-sm',
-          isUser
-            ? 'gradient-phoenix text-primary-foreground'
-            : 'glass-card hover-lift'
-        )}
-      >
+      <motion.div layout className={cn('max-w-[80%] rounded-2xl px-4 py-3 shadow-sm', isUser ? 'gradient-phoenix text-primary-foreground' : 'glass-card hover-lift')}>
         <div className="text-sm leading-relaxed">
           {renderContent(message.content)}
-          {isStreaming && (
-            <motion.span 
-              animate={{ opacity: [1, 0, 1] }}
-              transition={{ duration: 0.8, repeat: Infinity }}
-              className="inline-block w-2 h-5 bg-primary ml-1 rounded-sm"
-            />
-          )}
+          {isStreaming && <motion.span animate={{ opacity: [1, 0, 1] }} transition={{ duration: 0.8, repeat: Infinity }} className="inline-block w-2 h-5 bg-primary ml-1 rounded-sm" />}
         </div>
 
         {!isUser && !isStreaming && message.content && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30"
-          >
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 hover:bg-accent hover-scale"
-                  onClick={copyToClipboard}
-                >
-                  {copied ? (
-                    <Check className="h-3.5 w-3.5 text-green-500" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copy</TooltipContent>
-            </Tooltip>
-            
-            {onSpeak && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn('h-7 w-7 hover:bg-accent hover-scale', isSpeaking && 'text-primary bg-primary/10')}
-                    onClick={() => onSpeak(message.content)}
-                  >
-                    {isSpeaking ? (
-                      <VolumeX className="h-3.5 w-3.5" />
-                    ) : (
-                      <Volume2 className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{isSpeaking ? 'Stop' : 'Read aloud'}</TooltipContent>
-              </Tooltip>
-            )}
-            
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === 1 && 'text-green-500 bg-green-500/10')}
-                  onClick={() => onRate(1)}
-                >
-                  <ThumbsUp className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Good response</TooltipContent>
-            </Tooltip>
-            
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === -1 && 'text-destructive bg-destructive/10')}
-                  onClick={() => onRate(-1)}
-                >
-                  <ThumbsDown className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Poor response</TooltipContent>
-            </Tooltip>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30">
+            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-accent hover-scale" onClick={copyToClipboard}>{copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}</Button></TooltipTrigger><TooltipContent>Copy</TooltipContent></Tooltip>
+            {onSpeak && (<Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', isSpeaking && 'text-primary bg-primary/10')} onClick={() => onSpeak(message.content)}>{isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}</Button></TooltipTrigger><TooltipContent>{isSpeaking ? 'Stop' : 'Read aloud'}</TooltipContent></Tooltip>)}
+            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === 1 && 'text-green-500 bg-green-500/10')} onClick={() => onRate(1)}><ThumbsUp className="h-3.5 w-3.5" /></Button></TooltipTrigger><TooltipContent>Good response</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === -1 && 'text-destructive bg-destructive/10')} onClick={() => onRate(-1)}><ThumbsDown className="h-3.5 w-3.5" /></Button></TooltipTrigger><TooltipContent>Poor response</TooltipContent></Tooltip>
           </motion.div>
         )}
       </motion.div>
 
-      {isUser && (
-        <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 shadow-sm">
-          <span className="text-xs font-medium">You</span>
-        </div>
-      )}
+      {isUser && <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 shadow-sm"><span className="text-xs font-medium">You</span></div>}
     </motion.div>
   );
 };

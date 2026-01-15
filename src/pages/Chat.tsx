@@ -25,7 +25,7 @@ const Chat: React.FC = () => {
         
         <main className="flex-1 flex flex-col">
           {/* Header */}
-          <header className="h-14 border-b border-border flex items-center justify-between px-4">
+          <header className="sticky top-0 z-50 h-14 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center justify-between px-4">
             <div className="flex items-center gap-2">
               <SidebarTrigger className="md:hidden" />
               <PhoenixLogo size="sm" className="md:hidden" />

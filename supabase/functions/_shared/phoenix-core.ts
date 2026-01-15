@@ -47,6 +47,10 @@ export const AI_MODELS = {
   // Next-gen previews
   gemini3Pro: 'google/gemini-3-pro-preview',
   gemini3Flash: 'google/gemini-3-flash-preview',
+  
+  // Image generation models
+  imageGen: 'google/gemini-2.5-flash-image-preview',      // Fast generation
+  imageGenPro: 'google/gemini-3-pro-image-preview',       // Higher quality
 } as const;
 
 // Determine which model to use based on message complexity
@@ -451,9 +455,56 @@ export function parseCommand(message: string): CommandResult {
   return { isCommand: false };
 }
 
-// Universal search detection - VERY aggressive
+// Detect if message is casual/conversational (shouldn't trigger web search)
+function isCasualMessage(message: string): boolean {
+  const lowerMsg = message.toLowerCase().trim();
+  const msgLength = message.length;
+  
+  // Very short messages without question words are usually casual
+  if (msgLength < 20 && !/\b(who|what|where|when|why|how|which)\b/i.test(message)) {
+    // Check if it's NOT a specific query
+    if (!/\b(price|weather|news|score|result|president|time in)\b/i.test(lowerMsg)) {
+      return true;
+    }
+  }
+  
+  // Greetings and casual patterns
+  const casualPatterns = [
+    /^(hi|hey|hello|sup|yo|waddup|wassup|hola|hii+|heya?)(\s|!|,|\.)*$/i,
+    /^(good\s)?(morning|afternoon|evening|night)(\s|!|,|\.)*$/i,
+    /^(ok|okay|cool|nice|great|thanks|thank you|thx|ty|alright|fine|sure)(\s|!|,|\.)*$/i,
+    /^(lol|lmao|haha|hehe|rofl|😂|🤣|😭)+(\s|!|,|\.)*$/i,
+    /^(yes|no|yeah|yep|nope|nah|yea|ya)(\s|!|,|\.)*$/i,
+    /^(bye|goodbye|see you|later|cya|ttyl)(\s|!|,|\.)*$/i,
+    /^(bruh|bro|dude|fam|man|sis|girl)(\s|!|,|\.)*$/i,
+    /^(ikr|idk|nvm|smh|tbh|imo|fyi)(\s|!|,|\.)*$/i,
+    /^(you know|right|innit|fella|boi|u know)\?*(\s|!|,|\.)*$/i,
+    /^(same|mood|vibes|bet|facts|cap|no cap)(\s|!|,|\.)*$/i,
+    /^(hmm+|uhh*|ahh*|ohh*|ehh*)(\s|!|,|\.|\?)*$/i,
+    /^(what'?s? up|how are you|how r u|how u doin|how's it going)\?*$/i,
+    /^(nothing much|not much|nm|chillin|chilling)(\s|!|,|\.)*$/i,
+    /^(👋|🙏|❤️|🔥|👍|👎|😊|😁|😎)+$/,
+    /^(kwn|ikwym|ywn|fella|styl)\?*$/i, // Nigerian/internet slang
+  ];
+  
+  for (const pattern of casualPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Universal search detection - VERY aggressive (but excludes casual messages)
 export function needsWebSearch(message: string): { needed: boolean; query: string; searchType?: 'general' | 'social' | 'url' | 'time' } {
   const lowerMsg = message.toLowerCase();
+  
+  // FIRST: Exclude casual/conversational messages to prevent 400 errors
+  if (isCasualMessage(message)) {
+    console.log('💬 Casual message detected, skipping web search');
+    return { needed: false, query: '' };
+  }
   
   // Check for time queries first
   const timeCheck = isTimeQuery(message);
@@ -768,6 +819,114 @@ export async function generateVoiceResponse(text: string, elevenLabsKey: string)
   } catch (error) {
     console.error('Voice generation error:', error);
     return null;
+  }
+}
+
+// Detect image generation request from user message
+export function detectImageGenerationRequest(message: string): { 
+  shouldGenerate: boolean; 
+  prompt: string; 
+  quality: 'fast' | 'high';
+} {
+  const lowerMsg = message.toLowerCase();
+  
+  // Patterns that indicate image generation request
+  const generatePatterns = [
+    /generate (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic)/i,
+    /create (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic)/i,
+    /make (?:me )?(?:an? )?(?:image|picture|photo|art|artwork|graphic)/i,
+    /draw (?:me )?(?:an? )?(?:picture|image|artwork|graphic)/i,
+    /(?:can you |please )?(?:visualize|illustrate)\b/i,
+    /design (?:an? )?(?:logo|banner|poster|image|graphic|icon)/i,
+    /^(?:image|picture|photo|art)(?:\s*:|\s+of)\s+/i,
+    /paint (?:me )?(?:an? )?/i,
+    /show me (?:an? )?(?:image|picture|art) of/i,
+    /imagine (?:an? )?/i,
+  ];
+  
+  // High quality indicators
+  const highQualityPatterns = [
+    /\b(high quality|hq|detailed|professional|best quality|4k|hd|ultra)\b/i,
+    /\b(realistic|photorealistic|hyperrealistic)\b/i,
+    /\b(premium|stunning|beautiful|amazing)\b/i,
+  ];
+  
+  for (const pattern of generatePatterns) {
+    if (pattern.test(message)) {
+      // Extract the prompt (remove the command part)
+      let prompt = message
+        .replace(/^(generate|create|make|draw|design|show me|visualize|illustrate|paint|imagine)\s+(me\s+)?(an?\s+)?(image|picture|photo|art|artwork|illustration|logo|banner|poster|graphic|icon)(\s+of)?:?\s*/i, '')
+        .trim();
+      
+      if (!prompt || prompt.length < 3) prompt = message; // Use full message if extraction fails
+      
+      const quality = highQualityPatterns.some(p => p.test(message)) ? 'high' : 'fast';
+      
+      return { shouldGenerate: true, prompt, quality };
+    }
+  }
+  
+  return { shouldGenerate: false, prompt: '', quality: 'fast' };
+}
+
+// Generate image using Lovable AI Gateway
+export async function generateImage(
+  prompt: string, 
+  quality: 'fast' | 'high',
+  apiKey: string
+): Promise<{ success: boolean; imageBase64?: string; error?: string }> {
+  try {
+    console.log('🎨 Generating image:', prompt.slice(0, 80));
+    
+    const model = quality === 'high' 
+      ? AI_MODELS.imageGenPro 
+      : AI_MODELS.imageGen;
+    
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: `Generate a high-quality, visually stunning image: ${prompt}. Make it detailed and artistic.`
+          }
+        ],
+        modalities: ['image', 'text'],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Image generation failed:', response.status, errorText);
+      if (response.status === 429) {
+        return { success: false, error: 'Rate limited - please wait a moment and try again' };
+      }
+      if (response.status === 402) {
+        return { success: false, error: 'AI credits depleted' };
+      }
+      return { success: false, error: `Generation failed: ${response.status}` };
+    }
+
+    const data = await response.json();
+    const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+    
+    if (imageUrl && imageUrl.startsWith('data:image')) {
+      // Extract base64 from data URI
+      const base64 = imageUrl.split(',')[1];
+      console.log('✅ Image generated successfully');
+      return { success: true, imageBase64: base64 };
+    }
+    
+    console.error('No image in response:', JSON.stringify(data).slice(0, 200));
+    return { success: false, error: 'No image in response' };
+  } catch (error) {
+    console.error('Image generation error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
