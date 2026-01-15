@@ -102,11 +102,14 @@ async function sendTypingIndicator(chatId: string, idInstance: string, apiToken:
 // Send text message with chunking for long messages
 async function sendMessage(chatId: string, message: string, idInstance: string, apiToken: string): Promise<void> {
   try {
+    // Always normalize formatting for WhatsApp (prevents **bold** etc.)
+    const formatted = formatForWhatsApp(message);
+
     const maxLength = 4000;
     const chunks: string[] = [];
-    
-    if (message.length > maxLength) {
-      let remaining = message;
+
+    if (formatted.length > maxLength) {
+      let remaining = formatted;
       while (remaining.length > 0) {
         let splitIndex = maxLength;
         if (remaining.length > maxLength) {
@@ -118,7 +121,7 @@ async function sendMessage(chatId: string, message: string, idInstance: string, 
         remaining = remaining.slice(splitIndex).trim();
       }
     } else {
-      chunks.push(message);
+      chunks.push(formatted);
     }
 
     for (const chunk of chunks) {
@@ -131,7 +134,7 @@ async function sendMessage(chatId: string, message: string, idInstance: string, 
       if (!response.ok) {
         console.error('Send message failed:', await response.text());
       }
-      
+
       if (chunks.length > 1) {
         await new Promise(r => setTimeout(r, 500));
       }
@@ -145,10 +148,36 @@ async function sendMessage(chatId: string, message: string, idInstance: string, 
 async function sendVoiceMessage(chatId: string, audioBuffer: ArrayBuffer, idInstance: string, apiToken: string): Promise<boolean> {
   try {
     console.log('📤 Sending voice message to WhatsApp');
-    
-    // Convert to base64
+
+    // Convert to base64 for fallback JSON-mode
     const base64Audio = base64Encode(audioBuffer);
-    
+
+    // Prefer multipart/form-data (recommended by GreenAPI docs)
+    try {
+      const form = new FormData();
+      form.append('chatId', chatId);
+      form.append('fileName', 'voice_response.mp3');
+      form.append('caption', '');
+
+      const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+      form.append('file', blob, 'voice_response.mp3');
+
+      const resp = await fetch(`https://api.greenapi.com/waInstance${idInstance}/sendFileByUpload/${apiToken}`, {
+        method: 'POST',
+        body: form,
+      });
+
+      if (resp.ok) {
+        console.log('✅ Voice message sent (multipart)');
+        return true;
+      }
+
+      console.warn('Voice upload (multipart) failed:', await resp.text());
+    } catch (e) {
+      console.warn('Voice upload (multipart) error:', e);
+    }
+
+    // Fallback: JSON with data URI (some setups support this)
     const response = await fetch(`https://api.greenapi.com/waInstance${idInstance}/sendFileByUpload/${apiToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -161,16 +190,43 @@ async function sendVoiceMessage(chatId: string, audioBuffer: ArrayBuffer, idInst
     });
 
     if (!response.ok) {
-      // Try alternative method - sendFileByUrl won't work with base64
-      console.log('Upload failed, trying alternative...');
+      console.error('Voice message JSON fallback failed:', await response.text());
       return false;
     }
-    
-    console.log('✅ Voice message sent');
+
+    console.log('✅ Voice message sent (json fallback)');
     return true;
   } catch (error) {
     console.error('Voice message error:', error);
     return false;
+  }
+}
+
+// Resolve a media download URL when GreenAPI doesn't include it in the webhook payload
+async function resolveDownloadUrl(
+  chatId: string,
+  messageId: string | undefined,
+  idInstance: string,
+  apiToken: string
+): Promise<string | null> {
+  if (!messageId) return null;
+
+  try {
+    const url = new URL(`https://api.greenapi.com/waInstance${idInstance}/downloadFile/${apiToken}`);
+    url.searchParams.set('chatId', chatId);
+    url.searchParams.set('messageId', messageId);
+
+    const resp = await fetch(url.toString(), { method: 'GET' });
+    if (!resp.ok) {
+      console.error('downloadFile failed:', await resp.text());
+      return null;
+    }
+
+    const data = await resp.json().catch(() => ({} as any));
+    return (data.downloadUrl || data.urlFile || data.url) ?? null;
+  } catch (e) {
+    console.error('downloadFile error:', e);
+    return null;
   }
 }
 
@@ -479,18 +535,52 @@ Deno.serve(async (req) => {
     const history = await getConversationHistory(supabase, chatId, 30);
 
     // Handle image messages
-    if (webhook.messageData?.typeMessage === 'imageMessage' && webhook.messageData?.imageMessage?.downloadUrl) {
+    if (webhook.messageData?.typeMessage === 'imageMessage') {
       console.log('🖼️ Processing image message');
-      
-      const imageUrl = webhook.messageData.imageMessage.downloadUrl;
-      const caption = webhook.messageData.imageMessage.caption;
-      
+
+      const anyData: any = webhook.messageData as any;
+      const caption: string | undefined =
+        webhook.messageData?.imageMessage?.caption ||
+        anyData?.imageMessageData?.caption ||
+        anyData?.caption;
+
+      let imageUrl: string | null =
+        webhook.messageData?.imageMessage?.downloadUrl ||
+        anyData?.imageMessageData?.downloadUrl ||
+        anyData?.fileMessageData?.downloadUrl ||
+        null;
+
+      // Some GreenAPI payloads omit downloadUrl; request it using the message id
+      if (!imageUrl) {
+        imageUrl = await resolveDownloadUrl(chatId, webhook.idMessage, idInstance, apiToken);
+      }
+
+      if (!imageUrl) {
+        await sendMessage(
+          chatId,
+          "🖼️ I received your image, but WhatsApp didn't include a downloadable file link. Please resend the image (or add a caption/question) and I'll analyze it. 🔥",
+          idInstance,
+          apiToken
+        );
+
+        return new Response(
+          JSON.stringify({ status: 'partial', type: 'image', error: 'missing_download_url' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       const imageAnalysis = await analyzeImage(imageUrl, caption, lovableApiKey);
 
       if (imageAnalysis) {
         // Save to history
-        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent an image${caption ? `: "${caption}"` : ''}]`);
-        
+        await saveMessage(
+          supabase,
+          conversation.id,
+          chatId,
+          'user',
+          `[Sent an image${caption ? `: "${caption}"` : ''}]`
+        );
+
         // Process with full AI context if caption suggests a question
         let finalResponse = imageAnalysis;
         if (caption && (caption.includes('?') || caption.length > 10)) {
@@ -505,47 +595,79 @@ Deno.serve(async (req) => {
         } else {
           finalResponse = `🖼️ *Image Analysis:*\n\n${imageAnalysis}`;
         }
-        
+
         await saveMessage(supabase, conversation.id, chatId, 'assistant', finalResponse);
-        await sendMessage(chatId, formatForWhatsApp(finalResponse), idInstance, apiToken);
-        
+        await sendMessage(chatId, finalResponse, idInstance, apiToken);
+
         return new Response(
           JSON.stringify({ status: 'success', type: 'image' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
-      } else {
-        // Image analysis failed, acknowledge and ask to try again
-        await sendMessage(chatId, "🖼️ I received your image but had trouble analyzing it. Could you try sending it again? 🔥", idInstance, apiToken);
-        return new Response(
-          JSON.stringify({ status: 'partial', type: 'image', error: 'analysis_failed' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
       }
+
+      // Image analysis failed, acknowledge and ask to try again
+      await sendMessage(
+        chatId,
+        "🖼️ I received your image but had trouble analyzing it. Could you try sending it again? 🔥",
+        idInstance,
+        apiToken
+      );
+
+      return new Response(
+        JSON.stringify({ status: 'partial', type: 'image', error: 'analysis_failed' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // Handle audio/voice messages
-    const isVoiceMessage = webhook.messageData?.typeMessage === 'audioMessage' || 
-                           webhook.messageData?.typeMessage === 'voiceMessage' ||
-                           webhook.messageData?.typeMessage === 'pttMessage';
-    
-    if (isVoiceMessage && webhook.messageData?.audioMessage?.downloadUrl) {
+    const isVoiceMessage =
+      webhook.messageData?.typeMessage === 'audioMessage' ||
+      webhook.messageData?.typeMessage === 'voiceMessage' ||
+      webhook.messageData?.typeMessage === 'pttMessage';
+
+    if (isVoiceMessage) {
       console.log('🎤 Processing voice message');
-      
-      const audioUrl = webhook.messageData.audioMessage.downloadUrl;
-      
+
+      const anyData: any = webhook.messageData as any;
+
+      let audioUrl: string | null =
+        webhook.messageData?.audioMessage?.downloadUrl ||
+        anyData?.audioMessageData?.downloadUrl ||
+        anyData?.fileMessageData?.downloadUrl ||
+        null;
+
+      // Some GreenAPI payloads omit downloadUrl; request it using the message id
+      if (!audioUrl) {
+        audioUrl = await resolveDownloadUrl(chatId, webhook.idMessage, idInstance, apiToken);
+      }
+
+      if (!audioUrl) {
+        await sendMessage(
+          chatId,
+          "🎤 I received your voice note, but WhatsApp didn't include a downloadable audio link. Please resend it and I'll transcribe + reply. 🔥",
+          idInstance,
+          apiToken
+        );
+
+        return new Response(
+          JSON.stringify({ status: 'partial', type: 'voice', error: 'missing_download_url' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       let transcription: string | null = null;
-      
+
       // Use ElevenLabs for transcription if available
       if (elevenLabsKey) {
         transcription = await transcribeAudio(audioUrl, elevenLabsKey);
       }
-      
+
       if (transcription) {
         console.log('✅ Transcribed:', transcription.slice(0, 100));
-        
+
         // Save transcription
         await saveMessage(supabase, conversation.id, chatId, 'user', `[Voice message]: ${transcription}`);
-        
+
         // Process the transcribed text through the full AI pipeline
         const aiResponse = await processWithPhoenixAI(
           transcription,
@@ -553,38 +675,49 @@ Deno.serve(async (req) => {
           history,
           conversation.preferred_language
         );
-        
+
         await saveMessage(supabase, conversation.id, chatId, 'assistant', aiResponse);
-        
+
         // Try to send voice response back if ElevenLabs is available
         let voiceSent = false;
-        if (elevenLabsKey && aiResponse.length < 1000) { // Keep voice responses concise
+        if (elevenLabsKey && aiResponse.length < 1000) {
           const voiceBuffer = await generateVoiceResponse(aiResponse, elevenLabsKey);
           if (voiceBuffer) {
             voiceSent = await sendVoiceMessage(chatId, voiceBuffer, idInstance, apiToken);
           }
         }
-        
+
         // Always send text response (as backup or primary)
         if (!voiceSent) {
           await sendMessage(chatId, aiResponse, idInstance, apiToken);
         } else {
           // Send text as well for reference
-          await sendMessage(chatId, `📝 _Transcription: "${transcription.slice(0, 100)}${transcription.length > 100 ? '...' : ''}"_\n\n${aiResponse}`, idInstance, apiToken);
+          await sendMessage(
+            chatId,
+            `📝 _Transcription: "${transcription.slice(0, 100)}${transcription.length > 100 ? '...' : ''}"_\n\n${aiResponse}`,
+            idInstance,
+            apiToken
+          );
         }
-        
+
         return new Response(
           JSON.stringify({ status: 'success', type: 'voice', voiceResponse: voiceSent }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
-      } else {
-        // Transcription failed
-        await sendMessage(chatId, "🎤 I received your voice message! I'm still setting up advanced voice transcription. For now, could you type your message? I'll respond right away! 🔥", idInstance, apiToken);
-        return new Response(
-          JSON.stringify({ status: 'partial', type: 'voice', error: 'transcription_failed' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
       }
+
+      // Transcription failed
+      await sendMessage(
+        chatId,
+        "🎤 I received your voice message but had trouble transcribing it. Please try again, or type your message and I'll respond right away. 🔥",
+        idInstance,
+        apiToken
+      );
+
+      return new Response(
+        JSON.stringify({ status: 'partial', type: 'voice', error: 'transcription_failed' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // Extract text message

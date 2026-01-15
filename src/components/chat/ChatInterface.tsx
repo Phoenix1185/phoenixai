@@ -12,6 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
 import { useVoiceOutput } from '@/hooks/useVoiceOutput';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import ElevenLabsCallButton from './ElevenLabsCallButton';
 
 interface Message {
   id: string;
@@ -455,6 +456,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               rows={1}
             />
             <div className="absolute right-2 bottom-2 flex items-center gap-1">
+              {/* ElevenLabs voice call (agent) */}
+              <ElevenLabsCallButton disabled={!user || isLoading} />
+
               {voiceInputSupported && (
                 <Tooltip>
                   <TooltipTrigger asChild>

@@ -859,14 +859,14 @@ USER PREFERENCES:
 // Format WhatsApp message (convert markdown to WhatsApp format)
 export function formatForWhatsApp(text: string): string {
   return text
-    // Convert **bold** to *bold* (WhatsApp style)
-    .replace(/\*\*([^*]+)\*\*/g, '*$1*')
-    // Convert __bold__ to *bold*
-    .replace(/__([^_]+)__/g, '*$1*')
-    // Convert ``` code blocks to readable format
+    // Convert ``` code blocks to readable format first (avoid formatting inside code)
     .replace(/```[a-z]*\n?([\s\S]*?)```/g, '「$1」')
     // Convert inline code
     .replace(/`([^`]+)`/g, '「$1」')
+    // Convert **bold** to *bold* (WhatsApp style) - supports multiline
+    .replace(/\*\*([\s\S]+?)\*\*/g, '*$1*')
+    // Convert __bold__ to *bold*
+    .replace(/__([\s\S]+?)__/g, '*$1*')
     // Clean up headers
     .replace(/^#{1,6}\s+/gm, '▸ ')
     // Clean up bullet points
