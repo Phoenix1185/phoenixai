@@ -29,43 +29,94 @@ export interface CommandResult {
   pollData?: { question: string; options: string[] };
 }
 
-// AI Models available - use smarter models for complex tasks
+// AI Models available - expanded selection for different tasks
 export const AI_MODELS = {
-  fast: 'google/gemini-2.5-flash',       // Quick responses
-  standard: 'google/gemini-2.5-flash',   // Default
-  smart: 'google/gemini-2.5-pro',        // Complex reasoning
-  vision: 'google/gemini-2.5-flash',     // Image analysis
-  transcription: 'google/gemini-2.5-pro' // Audio transcription
+  // Fast models for quick responses
+  flash: 'google/gemini-2.5-flash',
+  flashLite: 'google/gemini-2.5-flash-lite',
+  
+  // Smart models for complex reasoning
+  pro: 'google/gemini-2.5-pro',
+  gpt5: 'openai/gpt-5',
+  gpt5Mini: 'openai/gpt-5-mini',
+  
+  // Specialized models
+  vision: 'google/gemini-2.5-pro', // Use Pro for better image understanding
+  reasoning: 'openai/gpt-5.2',     // Best for complex reasoning
+  
+  // Next-gen previews
+  gemini3Pro: 'google/gemini-3-pro-preview',
+  gemini3Flash: 'google/gemini-3-flash-preview',
 } as const;
 
 // Determine which model to use based on message complexity
 export function selectModel(message: string, hasImage: boolean, hasAudio: boolean): string {
-  if (hasAudio) return AI_MODELS.transcription;
+  if (hasAudio) return AI_MODELS.pro; // Better understanding for transcribed audio
   if (hasImage) return AI_MODELS.vision;
   
   const lowerMsg = message.toLowerCase();
+  const msgLength = message.length;
   
-  // Use smarter model for complex reasoning
+  // Very short simple messages - use flash lite
+  if (msgLength < 50 && !/\?|who|what|how|why|when|where/i.test(message)) {
+    return AI_MODELS.flashLite;
+  }
+  
+  // Use GPT-5.2 for the most complex reasoning tasks
+  const advancedReasoningPatterns = [
+    /step.by.step|chain.of.thought|think.*through/i,
+    /prove|theorem|mathematical|equation/i,
+    /logic.*puzzle|riddle|brainteaser/i,
+    /complex.*problem|multi.?step/i,
+    /philosophical|ethical.*dilemma/i,
+  ];
+  
+  for (const pattern of advancedReasoningPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return AI_MODELS.reasoning;
+    }
+  }
+  
+  // Use GPT-5 for current events, facts, and knowledge
+  const factualPatterns = [
+    /who is .*(president|minister|leader|ceo|founder|owner)/i,
+    /current .*(president|leader|government|prime minister)/i,
+    /\b(2024|2025|2026)\b/i,
+    /latest|current|recent|today|now/i,
+    /news|update|happening/i,
+  ];
+  
+  for (const pattern of factualPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return AI_MODELS.gpt5;
+    }
+  }
+  
+  // Use Pro for complex reasoning and analysis
   const complexPatterns = [
     /explain .*(why|how|difference|compare)/i,
-    /analyze|analysis/i,
-    /summarize|summary/i,
+    /analyze|analysis|deep.?dive/i,
+    /summarize|summary|breakdown/i,
     /what.*think|opinion|perspective/i,
-    /code|programming|debug|algorithm/i,
-    /calculate|compute|solve/i,
-    /who is .*(president|minister|leader|ceo)/i,
-    /current .*(president|leader|government)/i,
-    /\d{4}.*president/i,
-    /president.*\d{4}/i,
+    /code|programming|debug|algorithm|function|class/i,
+    /calculate|compute|solve|formula/i,
+    /compare|contrast|versus|vs\b/i,
+    /research|investigate|explore/i,
   ];
   
   for (const pattern of complexPatterns) {
     if (pattern.test(lowerMsg)) {
-      return AI_MODELS.smart;
+      return AI_MODELS.pro;
     }
   }
   
-  return AI_MODELS.standard;
+  // Use GPT-5 Mini for medium complexity (good balance)
+  if (msgLength > 100 || message.includes('?')) {
+    return AI_MODELS.gpt5Mini;
+  }
+  
+  // Default to flash for speed
+  return AI_MODELS.flash;
 }
 
 // Time zones for real-time queries
