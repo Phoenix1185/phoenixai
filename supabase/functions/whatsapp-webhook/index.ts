@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import {
   ConversationMessage,
   needsWebSearch,
@@ -13,6 +14,10 @@ import {
   isTimeQuery,
   getTimeForLocation,
   extractSocialMediaQuery,
+  selectModel,
+  analyzeImage,
+  transcribeAudio,
+  generateVoiceResponse,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -94,7 +99,7 @@ async function sendTypingIndicator(chatId: string, idInstance: string, apiToken:
   }
 }
 
-// Send message with chunking for long messages
+// Send text message with chunking for long messages
 async function sendMessage(chatId: string, message: string, idInstance: string, apiToken: string): Promise<void> {
   try {
     const maxLength = 4000;
@@ -136,6 +141,39 @@ async function sendMessage(chatId: string, message: string, idInstance: string, 
   }
 }
 
+// Send voice/audio message via GreenAPI
+async function sendVoiceMessage(chatId: string, audioBuffer: ArrayBuffer, idInstance: string, apiToken: string): Promise<boolean> {
+  try {
+    console.log('📤 Sending voice message to WhatsApp');
+    
+    // Convert to base64
+    const base64Audio = base64Encode(audioBuffer);
+    
+    const response = await fetch(`https://api.greenapi.com/waInstance${idInstance}/sendFileByUpload/${apiToken}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId,
+        file: `data:audio/mpeg;base64,${base64Audio}`,
+        fileName: 'voice_response.mp3',
+        caption: '',
+      }),
+    });
+
+    if (!response.ok) {
+      // Try alternative method - sendFileByUrl won't work with base64
+      console.log('Upload failed, trying alternative...');
+      return false;
+    }
+    
+    console.log('✅ Voice message sent');
+    return true;
+  } catch (error) {
+    console.error('Voice message error:', error);
+    return false;
+  }
+}
+
 // Send poll via GreenAPI
 async function sendPoll(chatId: string, question: string, options: string[], idInstance: string, apiToken: string): Promise<void> {
   try {
@@ -151,30 +189,12 @@ async function sendPoll(chatId: string, question: string, options: string[], idI
     });
 
     if (!response.ok) {
-      // Fallback to text poll if native poll fails
       console.log('Native poll failed, using text fallback');
       await sendMessage(chatId, formatPoll(question, options), idInstance, apiToken);
     }
   } catch (error) {
     console.error('Poll error, using fallback:', error);
     await sendMessage(chatId, formatPoll(question, options), idInstance, apiToken);
-  }
-}
-
-// Send sticker
-async function sendSticker(chatId: string, stickerUrl: string, idInstance: string, apiToken: string): Promise<void> {
-  try {
-    await fetch(`https://api.greenapi.com/waInstance${idInstance}/sendFileByUrl/${apiToken}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chatId,
-        urlFile: stickerUrl,
-        fileName: 'sticker.webp',
-      }),
-    });
-  } catch (error) {
-    console.error('Sticker error:', error);
   }
 }
 
@@ -253,75 +273,6 @@ async function updateConversationLanguage(supabase: any, conversationId: string,
     .eq('id', conversationId);
 }
 
-// Analyze image with Gemini Vision
-async function analyzeImage(imageUrl: string, caption: string | undefined, apiKey: string): Promise<string | null> {
-  try {
-    console.log('🖼️ Analyzing WhatsApp image');
-    
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: caption || 'Describe this image in detail. What do you see? Keep response under 500 words.' },
-              { type: 'image_url', image_url: { url: imageUrl } },
-            ],
-          },
-        ],
-        max_tokens: 1024,
-      }),
-    });
-
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || null;
-  } catch (error) {
-    console.error('Image analysis error:', error);
-    return null;
-  }
-}
-
-// Transcribe audio with Gemini
-async function transcribeAudio(audioUrl: string, apiKey: string): Promise<string | null> {
-  try {
-    console.log('🎤 Transcribing audio');
-    
-    // For audio, we'll use the model to process the audio file
-    // Note: This is a simplified version - for production, you'd want proper audio processing
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'user',
-            content: `The user sent a voice message. Audio URL: ${audioUrl}. Please acknowledge that you received a voice message and ask them to type their message for now, as voice transcription is being set up.`,
-          },
-        ],
-        max_tokens: 256,
-      }),
-    });
-
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || null;
-  } catch (error) {
-    console.error('Transcription error:', error);
-    return null;
-  }
-}
-
 // Check if bot is mentioned in group
 function isBotMentioned(webhook: GreenAPIMessage, botWid: string): boolean {
   const mentionedList = webhook.messageData?.extendedTextMessageData?.contextInfo?.mentionedJidList;
@@ -329,12 +280,10 @@ function isBotMentioned(webhook: GreenAPIMessage, botWid: string): boolean {
     return true;
   }
   
-  // Also check if the message text mentions the bot
   const messageText = webhook.messageData?.textMessageData?.textMessage || 
                       webhook.messageData?.extendedTextMessageData?.text || '';
   const lowerText = messageText.toLowerCase();
   
-  // Common ways to mention the bot
   if (lowerText.includes('@phoenix') || lowerText.includes('phoenix ai') || lowerText.includes('hey phoenix')) {
     return true;
   }
@@ -352,7 +301,8 @@ async function processWithPhoenixAI(
   message: string, 
   senderName: string,
   conversationHistory: ConversationMessage[],
-  preferredLanguage?: string
+  preferredLanguage?: string,
+  messageContext?: string
 ): Promise<string> {
   const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
   const tavilyApiKey = Deno.env.get('TAVILY_API_KEY');
@@ -365,14 +315,14 @@ async function processWithPhoenixAI(
     savedLanguage: preferredLanguage,
   });
 
-  let webContext = '';
+  let webContext = messageContext || '';
 
   // Check for time queries first
   const timeCheck = isTimeQuery(message);
   if (timeCheck.isTime && timeCheck.location) {
     const timeInfo = getTimeForLocation(timeCheck.location);
     if (timeInfo) {
-      webContext = `\n\n⏰ TIME INFO: ${timeInfo}`;
+      webContext += `\n\n⏰ TIME INFO: ${timeInfo}`;
     }
   }
 
@@ -383,7 +333,7 @@ async function processWithPhoenixAI(
     for (const url of urls.slice(0, 2)) {
       const content = await scrapeUrl(url, firecrawlApiKey);
       if (content) {
-        const truncated = content.length > 4000 ? content.slice(0, 4000) + '...' : content;
+        const truncated = content.length > 5000 ? content.slice(0, 5000) + '...' : content;
         webContext += `\n\n📄 Content from ${url}:\n${truncated}`;
       }
     }
@@ -397,8 +347,8 @@ async function processWithPhoenixAI(
     if (results.results.length > 0) {
       webContext += `\n\n🔍 ${socialQuery.platform} Search Results:\n`;
       if (results.answer) webContext += `Summary: ${results.answer}\n\n`;
-      for (const r of results.results.slice(0, 4)) {
-        webContext += `• ${r.title}: ${r.content.slice(0, 300)}\nSource: ${r.url}\n\n`;
+      for (const r of results.results.slice(0, 5)) {
+        webContext += `• ${r.title}: ${r.content.slice(0, 400)}\nSource: ${r.url}\n\n`;
       }
     }
   }
@@ -409,15 +359,18 @@ async function processWithPhoenixAI(
     console.log('🔍 General search:', searchCheck.query);
     const results = await performTavilySearch(searchCheck.query, tavilyApiKey);
     if (results.results.length > 0) {
-      webContext += '\n\n🔍 Live Search Results:\n';
+      webContext += '\n\n🔍 Live Web Search Results:\n';
       if (results.answer) webContext += `Quick Answer: ${results.answer}\n\n`;
-      for (const r of results.results.slice(0, 5)) {
-        webContext += `• ${r.title}: ${r.content.slice(0, 400)}\nSource: ${r.url}\n\n`;
+      for (const r of results.results.slice(0, 6)) {
+        webContext += `• ${r.title}: ${r.content.slice(0, 500)}\nSource: ${r.url}\n\n`;
       }
     }
   }
 
   const userContent = message + webContext;
+  
+  // Select the right model for complexity
+  const model = selectModel(message, false, false);
 
   // Build messages array with full context
   const messagesForAI = [
@@ -426,6 +379,8 @@ async function processWithPhoenixAI(
     { role: 'user', content: userContent },
   ];
 
+  console.log(`🤖 Using model: ${model}`);
+
   const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -433,10 +388,10 @@ async function processWithPhoenixAI(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
+      model,
       messages: messagesForAI,
       stream: false,
-      max_tokens: 2048,
+      max_tokens: 3000,
     }),
   });
 
@@ -472,6 +427,7 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
+    const elevenLabsKey = Deno.env.get('ELEVENLABS_API_KEY');
 
     if (!idInstance || !apiToken) {
       return new Response(
@@ -483,11 +439,11 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const webhook: GreenAPIMessage = await req.json();
     
-    console.log('📱 Webhook:', webhook.typeWebhook, webhook.senderData?.chatId);
+    console.log('📱 Webhook:', webhook.typeWebhook, webhook.senderData?.chatId, 'Type:', webhook.messageData?.typeMessage);
 
     if (webhook.typeWebhook !== 'incomingMessageReceived') {
       return new Response(
-        JSON.stringify({ status: 'ignored' }),
+        JSON.stringify({ status: 'ignored', reason: webhook.typeWebhook }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -517,42 +473,115 @@ Deno.serve(async (req) => {
 
     // Send typing immediately
     sendTypingIndicator(chatId, idInstance, apiToken);
+    
+    // Get or create conversation early for all message types
+    const conversation = await getOrCreateConversation(supabase, chatId, senderName);
+    const history = await getConversationHistory(supabase, chatId, 30);
 
     // Handle image messages
     if (webhook.messageData?.typeMessage === 'imageMessage' && webhook.messageData?.imageMessage?.downloadUrl) {
       console.log('🖼️ Processing image message');
-      const imageAnalysis = await analyzeImage(
-        webhook.messageData.imageMessage.downloadUrl,
-        webhook.messageData.imageMessage.caption,
-        lovableApiKey
-      );
+      
+      const imageUrl = webhook.messageData.imageMessage.downloadUrl;
+      const caption = webhook.messageData.imageMessage.caption;
+      
+      const imageAnalysis = await analyzeImage(imageUrl, caption, lovableApiKey);
 
       if (imageAnalysis) {
-        const conversation = await getOrCreateConversation(supabase, chatId, senderName);
-        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent an image: ${webhook.messageData.imageMessage.caption || 'no caption'}]`);
-        await saveMessage(supabase, conversation.id, chatId, 'assistant', imageAnalysis);
-        await sendMessage(chatId, formatForWhatsApp(`🖼️ *Image Analysis:*\n\n${imageAnalysis}`), idInstance, apiToken);
+        // Save to history
+        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent an image${caption ? `: "${caption}"` : ''}]`);
+        
+        // Process with full AI context if caption suggests a question
+        let finalResponse = imageAnalysis;
+        if (caption && (caption.includes('?') || caption.length > 10)) {
+          // Use AI to generate a contextual response
+          finalResponse = await processWithPhoenixAI(
+            caption || 'Describe this image',
+            senderName,
+            history,
+            conversation.preferred_language,
+            `\n\n🖼️ IMAGE ANALYSIS:\n${imageAnalysis}`
+          );
+        } else {
+          finalResponse = `🖼️ *Image Analysis:*\n\n${imageAnalysis}`;
+        }
+        
+        await saveMessage(supabase, conversation.id, chatId, 'assistant', finalResponse);
+        await sendMessage(chatId, formatForWhatsApp(finalResponse), idInstance, apiToken);
         
         return new Response(
           JSON.stringify({ status: 'success', type: 'image' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else {
+        // Image analysis failed, acknowledge and ask to try again
+        await sendMessage(chatId, "🖼️ I received your image but had trouble analyzing it. Could you try sending it again? 🔥", idInstance, apiToken);
+        return new Response(
+          JSON.stringify({ status: 'partial', type: 'image', error: 'analysis_failed' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
     }
 
     // Handle audio/voice messages
-    if ((webhook.messageData?.typeMessage === 'audioMessage' || webhook.messageData?.typeMessage === 'voiceMessage') && 
-        webhook.messageData?.audioMessage?.downloadUrl) {
+    const isVoiceMessage = webhook.messageData?.typeMessage === 'audioMessage' || 
+                           webhook.messageData?.typeMessage === 'voiceMessage' ||
+                           webhook.messageData?.typeMessage === 'pttMessage';
+    
+    if (isVoiceMessage && webhook.messageData?.audioMessage?.downloadUrl) {
       console.log('🎤 Processing voice message');
-      const transcription = await transcribeAudio(
-        webhook.messageData.audioMessage.downloadUrl,
-        lovableApiKey
-      );
-
+      
+      const audioUrl = webhook.messageData.audioMessage.downloadUrl;
+      
+      let transcription: string | null = null;
+      
+      // Use ElevenLabs for transcription if available
+      if (elevenLabsKey) {
+        transcription = await transcribeAudio(audioUrl, elevenLabsKey);
+      }
+      
       if (transcription) {
-        await sendMessage(chatId, formatForWhatsApp(transcription), idInstance, apiToken);
+        console.log('✅ Transcribed:', transcription.slice(0, 100));
+        
+        // Save transcription
+        await saveMessage(supabase, conversation.id, chatId, 'user', `[Voice message]: ${transcription}`);
+        
+        // Process the transcribed text through the full AI pipeline
+        const aiResponse = await processWithPhoenixAI(
+          transcription,
+          senderName,
+          history,
+          conversation.preferred_language
+        );
+        
+        await saveMessage(supabase, conversation.id, chatId, 'assistant', aiResponse);
+        
+        // Try to send voice response back if ElevenLabs is available
+        let voiceSent = false;
+        if (elevenLabsKey && aiResponse.length < 1000) { // Keep voice responses concise
+          const voiceBuffer = await generateVoiceResponse(aiResponse, elevenLabsKey);
+          if (voiceBuffer) {
+            voiceSent = await sendVoiceMessage(chatId, voiceBuffer, idInstance, apiToken);
+          }
+        }
+        
+        // Always send text response (as backup or primary)
+        if (!voiceSent) {
+          await sendMessage(chatId, aiResponse, idInstance, apiToken);
+        } else {
+          // Send text as well for reference
+          await sendMessage(chatId, `📝 _Transcription: "${transcription.slice(0, 100)}${transcription.length > 100 ? '...' : ''}"_\n\n${aiResponse}`, idInstance, apiToken);
+        }
+        
         return new Response(
-          JSON.stringify({ status: 'success', type: 'audio' }),
+          JSON.stringify({ status: 'success', type: 'voice', voiceResponse: voiceSent }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else {
+        // Transcription failed
+        await sendMessage(chatId, "🎤 I received your voice message! I'm still setting up advanced voice transcription. For now, could you type your message? I'll respond right away! 🔥", idInstance, apiToken);
+        return new Response(
+          JSON.stringify({ status: 'partial', type: 'voice', error: 'transcription_failed' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -570,9 +599,21 @@ Deno.serve(async (req) => {
     messageText = messageText.replace(/@\d+/g, '').trim();
 
     if (!messageText) {
+      // This should rarely happen now since we handle images and voice above
+      const msgType = webhook.messageData?.typeMessage || 'unknown';
+      console.log('⚠️ No text extracted from message type:', msgType);
+      
+      // Don't send generic welcome for stickers, reactions, etc.
+      if (msgType === 'stickerMessage' || msgType === 'reactionMessage') {
+        return new Response(
+          JSON.stringify({ status: 'ignored', type: msgType }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      
       await sendMessage(
         chatId,
-        "🔥 Hey! I'm Phoenix AI. Send me a text message, image, or voice note!",
+        `🔥 Hey ${senderName}! I received your ${msgType === 'documentMessage' ? 'document' : 'message'}. Try sending me text, an image, or a voice note and I'll help you out!`,
         idInstance,
         apiToken
       );
@@ -581,9 +622,6 @@ Deno.serve(async (req) => {
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-
-    // Get or create conversation
-    const conversation = await getOrCreateConversation(supabase, chatId, senderName);
 
     // Check for special commands
     const command = parseCommand(messageText);
@@ -599,14 +637,14 @@ Deno.serve(async (req) => {
 
         case 'clear':
           await clearConversation(supabase, chatId);
-          await sendMessage(chatId, "🧹 Done! I've cleared our conversation history. Let's start fresh! 🔥\n\nWhat would you like to talk about?", idInstance, apiToken);
+          await sendMessage(chatId, `🧹 Done ${senderName}! I've cleared our conversation history. Let's start fresh! 🔥\n\nWhat would you like to talk about?`, idInstance, apiToken);
           return new Response(
             JSON.stringify({ status: 'success', command: 'clear' }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
 
         case 'save':
-          await sendMessage(chatId, "💾 Conversation saved! All our chat history is securely stored and I'll remember everything we've discussed. 🔥", idInstance, apiToken);
+          await sendMessage(chatId, `💾 Conversation saved ${senderName}! All our chat history is securely stored and I'll remember everything we've discussed. 🔥`, idInstance, apiToken);
           return new Response(
             JSON.stringify({ status: 'success', command: 'save' }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -619,8 +657,9 @@ Deno.serve(async (req) => {
               en: 'English', fr: 'French', es: 'Spanish', de: 'German',
               pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', ar: 'Arabic',
               hi: 'Hindi', ru: 'Russian', it: 'Italian', yo: 'Yoruba',
+              ha: 'Hausa', ig: 'Igbo', pcm: 'Nigerian Pidgin',
             };
-            await sendMessage(chatId, `🗣️ Got it! From now on, I'll respond in *${langNames[command.language] || command.language}*. 🔥`, idInstance, apiToken);
+            await sendMessage(chatId, `🗣️ Got it ${senderName}! From now on, I'll respond in *${langNames[command.language] || command.language}*. 🔥`, idInstance, apiToken);
           }
           return new Response(
             JSON.stringify({ status: 'success', command: 'language' }),
@@ -638,9 +677,8 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Get conversation history
-    const history = await getConversationHistory(supabase, chatId, 30);
     console.log(`🧠 Processing: ${senderName} (${history.length} messages in history)`);
+    console.log(`📝 Message: "${messageText.slice(0, 100)}${messageText.length > 100 ? '...' : ''}"`);
 
     // Save user message
     await saveMessage(supabase, conversation.id, chatId, 'user', messageText);

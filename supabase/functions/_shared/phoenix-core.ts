@@ -29,20 +29,69 @@ export interface CommandResult {
   pollData?: { question: string; options: string[] };
 }
 
+// AI Models available - use smarter models for complex tasks
+export const AI_MODELS = {
+  fast: 'google/gemini-2.5-flash',       // Quick responses
+  standard: 'google/gemini-2.5-flash',   // Default
+  smart: 'google/gemini-2.5-pro',        // Complex reasoning
+  vision: 'google/gemini-2.5-flash',     // Image analysis
+  transcription: 'google/gemini-2.5-pro' // Audio transcription
+} as const;
+
+// Determine which model to use based on message complexity
+export function selectModel(message: string, hasImage: boolean, hasAudio: boolean): string {
+  if (hasAudio) return AI_MODELS.transcription;
+  if (hasImage) return AI_MODELS.vision;
+  
+  const lowerMsg = message.toLowerCase();
+  
+  // Use smarter model for complex reasoning
+  const complexPatterns = [
+    /explain .*(why|how|difference|compare)/i,
+    /analyze|analysis/i,
+    /summarize|summary/i,
+    /what.*think|opinion|perspective/i,
+    /code|programming|debug|algorithm/i,
+    /calculate|compute|solve/i,
+    /who is .*(president|minister|leader|ceo)/i,
+    /current .*(president|leader|government)/i,
+    /\d{4}.*president/i,
+    /president.*\d{4}/i,
+  ];
+  
+  for (const pattern of complexPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return AI_MODELS.smart;
+    }
+  }
+  
+  return AI_MODELS.standard;
+}
+
 // Time zones for real-time queries
 const TIME_ZONES: Record<string, string> = {
   'nigeria': 'Africa/Lagos',
+  'lagos': 'Africa/Lagos',
+  'abuja': 'Africa/Lagos',
   'usa': 'America/New_York',
   'us': 'America/New_York',
   'america': 'America/New_York',
+  'united states': 'America/New_York',
   'new york': 'America/New_York',
+  'nyc': 'America/New_York',
   'los angeles': 'America/Los_Angeles',
   'la': 'America/Los_Angeles',
   'california': 'America/Los_Angeles',
   'chicago': 'America/Chicago',
+  'miami': 'America/New_York',
+  'houston': 'America/Chicago',
+  'dallas': 'America/Chicago',
+  'washington': 'America/New_York',
+  'dc': 'America/New_York',
   'london': 'Europe/London',
   'uk': 'Europe/London',
-  'paris': 'France/Paris',
+  'england': 'Europe/London',
+  'paris': 'Europe/Paris',
   'france': 'Europe/Paris',
   'germany': 'Europe/Berlin',
   'berlin': 'Europe/Berlin',
@@ -51,15 +100,21 @@ const TIME_ZONES: Record<string, string> = {
   'china': 'Asia/Shanghai',
   'beijing': 'Asia/Shanghai',
   'india': 'Asia/Kolkata',
+  'mumbai': 'Asia/Kolkata',
+  'delhi': 'Asia/Kolkata',
   'dubai': 'Asia/Dubai',
+  'uae': 'Asia/Dubai',
   'australia': 'Australia/Sydney',
   'sydney': 'Australia/Sydney',
+  'melbourne': 'Australia/Melbourne',
   'brazil': 'America/Sao_Paulo',
   'south africa': 'Africa/Johannesburg',
   'johannesburg': 'Africa/Johannesburg',
+  'cape town': 'Africa/Johannesburg',
   'kenya': 'Africa/Nairobi',
   'nairobi': 'Africa/Nairobi',
   'ghana': 'Africa/Accra',
+  'accra': 'Africa/Accra',
   'egypt': 'Africa/Cairo',
   'cairo': 'Africa/Cairo',
   'morocco': 'Africa/Casablanca',
@@ -71,6 +126,7 @@ const TIME_ZONES: Record<string, string> = {
   'moscow': 'Europe/Moscow',
   'canada': 'America/Toronto',
   'toronto': 'America/Toronto',
+  'vancouver': 'America/Vancouver',
   'mexico': 'America/Mexico_City',
   'spain': 'Europe/Madrid',
   'madrid': 'Europe/Madrid',
@@ -105,7 +161,7 @@ const TIME_ZONES: Record<string, string> = {
 
 // Get real-time for a location
 export function getTimeForLocation(location: string): string | null {
-  const lowerLocation = location.toLowerCase();
+  const lowerLocation = location.toLowerCase().trim();
   
   for (const [key, tz] of Object.entries(TIME_ZONES)) {
     if (lowerLocation.includes(key)) {
@@ -122,7 +178,8 @@ export function getTimeForLocation(location: string): string | null {
           second: '2-digit',
           hour12: true,
         });
-        return `The current time in ${key.charAt(0).toUpperCase() + key.slice(1)} is: ${formatter.format(now)}`;
+        const locationName = key.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        return `The current time in ${locationName} (${tz}) is: ${formatter.format(now)}`;
       } catch {
         return null;
       }
@@ -133,19 +190,31 @@ export function getTimeForLocation(location: string): string | null {
 
 // Detect time-related queries
 export function isTimeQuery(message: string): { isTime: boolean; location?: string } {
+  const lowerMsg = message.toLowerCase();
+  
   const timePatterns = [
-    /what('s| is) (the )?(time|date|day) (in|at) ([a-zA-Z\s]+)/i,
+    /what('?s| is| the) ?(the )?(time|date|day) (in|at) ([a-zA-Z\s]+)/i,
     /time (in|at) ([a-zA-Z\s]+)/i,
     /current time (in|at) ([a-zA-Z\s]+)/i,
     /what time is it (in|at) ([a-zA-Z\s]+)/i,
+    /what is the time (in|at) ([a-zA-Z\s]+)/i,
+    /(in|at) ([a-zA-Z\s]+)[,.]? what('?s| is)? the time/i,
   ];
 
   for (const pattern of timePatterns) {
     const match = message.match(pattern);
     if (match) {
-      // Extract location from the last capture group
       const location = match[match.length - 1]?.trim();
-      return { isTime: true, location };
+      if (location && location.length > 1) {
+        return { isTime: true, location };
+      }
+    }
+  }
+
+  // Check for simple patterns like "time in nigeria"
+  for (const loc of Object.keys(TIME_ZONES)) {
+    if (lowerMsg.includes('time') && lowerMsg.includes(loc)) {
+      return { isTime: true, location: loc };
     }
   }
 
@@ -156,17 +225,29 @@ export function isTimeQuery(message: string): { isTime: boolean; location?: stri
 export function extractSocialMediaQuery(message: string): { platform: string; handle: string; query: string } | null {
   const lowerMsg = message.toLowerCase();
   
-  // Twitter/X handles
+  // Twitter/X handles - very specific detection
   const twitterMatch = message.match(/@([a-zA-Z0-9_]+)/);
-  if (twitterMatch || lowerMsg.includes('twitter') || lowerMsg.includes('x handle') || lowerMsg.includes('x.com')) {
-    const handle = twitterMatch ? twitterMatch[1] : '';
+  if (twitterMatch) {
+    const handle = twitterMatch[1];
     return {
       platform: 'Twitter/X',
-      handle: handle || 'unknown',
-      query: handle 
-        ? `${handle} Twitter X profile site:x.com OR site:twitter.com` 
-        : message.replace(/(check|look up|find|search)/gi, '').trim(),
+      handle,
+      query: `"@${handle}" OR "${handle}" site:x.com OR site:twitter.com`,
     };
+  }
+  
+  // Check for X/Twitter mentions without @
+  if (lowerMsg.includes('twitter') || lowerMsg.includes('x handle') || lowerMsg.includes('x.com') || lowerMsg.includes('on x ')) {
+    const words = message.split(/\s+/);
+    for (const word of words) {
+      if (/^[a-zA-Z][a-zA-Z0-9_]{2,15}$/.test(word) && !['twitter', 'check', 'find', 'search', 'this', 'that', 'handle', 'user', 'profile'].includes(word.toLowerCase())) {
+        return {
+          platform: 'Twitter/X',
+          handle: word,
+          query: `"@${word}" OR "${word}" site:x.com OR site:twitter.com Twitter profile`,
+        };
+      }
+    }
   }
 
   // Instagram handles
@@ -177,7 +258,7 @@ export function extractSocialMediaQuery(message: string): { platform: string; ha
       platform: 'Instagram',
       handle,
       query: handle 
-        ? `${handle} Instagram profile site:instagram.com` 
+        ? `"${handle}" Instagram profile site:instagram.com` 
         : message,
     };
   }
@@ -187,7 +268,7 @@ export function extractSocialMediaQuery(message: string): { platform: string; ha
     return {
       platform: 'YouTube',
       handle: '',
-      query: message.replace(/(check|look up|find|search|youtube|yt)/gi, '').trim() + ' YouTube channel',
+      query: message.replace(/(check|look up|find|search|youtube|yt)/gi, '').trim() + ' YouTube channel site:youtube.com',
     };
   }
 
@@ -196,7 +277,7 @@ export function extractSocialMediaQuery(message: string): { platform: string; ha
     return {
       platform: 'TikTok',
       handle: '',
-      query: message.replace(/(check|look up|find|search|tiktok)/gi, '').trim() + ' TikTok profile',
+      query: message.replace(/(check|look up|find|search|tiktok)/gi, '').trim() + ' TikTok profile site:tiktok.com',
     };
   }
 
@@ -205,7 +286,7 @@ export function extractSocialMediaQuery(message: string): { platform: string; ha
     return {
       platform: 'LinkedIn',
       handle: '',
-      query: message.replace(/(check|look up|find|search|linkedin)/gi, '').trim() + ' LinkedIn profile',
+      query: message.replace(/(check|look up|find|search|linkedin)/gi, '').trim() + ' LinkedIn profile site:linkedin.com',
     };
   }
 
@@ -214,7 +295,7 @@ export function extractSocialMediaQuery(message: string): { platform: string; ha
     return {
       platform: 'Facebook',
       handle: '',
-      query: message.replace(/(check|look up|find|search|facebook|fb)/gi, '').trim() + ' Facebook page',
+      query: message.replace(/(check|look up|find|search|facebook|fb)/gi, '').trim() + ' Facebook page site:facebook.com',
     };
   }
 
@@ -224,16 +305,17 @@ export function extractSocialMediaQuery(message: string): { platform: string; ha
 // Enhanced URL detection - any URL type including social media
 export function extractUrls(message: string): string[] {
   const urlPatterns = [
-    // Standard URLs
+    // Standard URLs with protocol
     /(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/gi,
-    // URLs without protocol
+    // URLs without protocol but with www
     /(www\.[^\s<>"{}|\\^`\[\]]+)/gi,
-    // Social media short URLs
+    // Short URLs
     /(t\.co\/[a-zA-Z0-9]+)/gi,
     /(bit\.ly\/[a-zA-Z0-9]+)/gi,
     /(youtu\.be\/[a-zA-Z0-9_-]+)/gi,
-    // Domain patterns
-    /([a-zA-Z0-9-]+\.(com|org|net|io|co|dev|app|ai|xyz|me|info|biz|edu|gov)[^\s]*)/gi,
+    /(goo\.gl\/[a-zA-Z0-9]+)/gi,
+    // Domain patterns (be more specific)
+    /(?<!\w)([a-zA-Z0-9][-a-zA-Z0-9]*\.(com|org|net|io|co|dev|app|ai|xyz|me|info|biz|edu|gov|ng|uk|ca|au|de|fr|jp|cn|in)(\/[^\s]*)?)/gi,
   ];
 
   const urls: string[] = [];
@@ -250,6 +332,14 @@ export function extractUrls(message: string): string[] {
       return `https://${url}`;
     }
     return url;
+  }).filter(url => {
+    // Filter out invalid URLs
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -265,12 +355,14 @@ export function parseCommand(message: string): CommandResult {
   // Clear/forget everything
   if (lowerMsg.includes('clear everything') || lowerMsg.includes('forget everything') || 
       lowerMsg.includes('start fresh') || lowerMsg.includes('reset conversation') ||
-      lowerMsg.includes('forget what we discussed') || lowerMsg.includes('clear our chat')) {
+      lowerMsg.includes('forget what we discussed') || lowerMsg.includes('clear our chat') ||
+      lowerMsg.includes('delete history') || lowerMsg.includes('reset chat')) {
     return { isCommand: true, command: 'clear' };
   }
 
   // Language switching
-  const langMatch = message.match(/(?:let'?s? )?(?:speak|talk|respond|switch) (?:in |to )?([a-zA-Z]+)/i);
+  const langMatch = message.match(/(?:let'?s? )?(?:speak|talk|respond|switch|chat) (?:in |to )?([a-zA-Z]+)$/i) ||
+                    message.match(/^(?:speak|talk|respond|switch|chat) (?:in |to )?([a-zA-Z]+)/i);
   if (langMatch) {
     const requestedLang = langMatch[1].toLowerCase();
     const langMap: Record<string, string> = {
@@ -278,7 +370,7 @@ export function parseCommand(message: string): CommandResult {
       'portuguese': 'pt', 'chinese': 'zh', 'japanese': 'ja', 'arabic': 'ar',
       'hindi': 'hi', 'russian': 'ru', 'italian': 'it', 'dutch': 'nl',
       'korean': 'ko', 'turkish': 'tr', 'polish': 'pl', 'swahili': 'sw',
-      'yoruba': 'yo', 'hausa': 'ha', 'igbo': 'ig',
+      'yoruba': 'yo', 'hausa': 'ha', 'igbo': 'ig', 'pidgin': 'pcm',
     };
     
     if (langMap[requestedLang]) {
@@ -290,7 +382,6 @@ export function parseCommand(message: string): CommandResult {
   const pollMatch = message.match(/create (?:a )?poll[:\s]+(.+)/i);
   if (pollMatch || lowerMsg.startsWith('poll:')) {
     const pollContent = pollMatch ? pollMatch[1] : message.replace(/^poll:\s*/i, '');
-    // Parse "Question? Option1, Option2, Option3"
     const parts = pollContent.split('?');
     if (parts.length >= 2) {
       const question = parts[0].trim() + '?';
@@ -331,20 +422,23 @@ export function needsWebSearch(message: string): { needed: boolean; query: strin
     return { needed: true, query: urls[0], searchType: 'url' };
   }
 
-  // Very comprehensive patterns
+  // Very comprehensive patterns - anything that needs current info
   const patterns = [
     // Time and date queries
-    /what('s| is) (the )?(time|date|day)/i,
+    /what('?s| is) (the )?(time|date|day)/i,
     
-    // Current events and real-time data
-    /what('s| is) (the )?(latest|current|recent|today'?s?|new|happening)/i,
+    // Current events and real-time data  
+    /what('?s| is) (the )?(latest|current|recent|today'?s?|new|happening)/i,
     /news (about|on|regarding|for)/i,
-    /(price|stock|weather|score|result|update|rate|exchange) (of|for|on|in)/i,
+    /(price|stock|weather|score|result|update|rate|exchange|value) (of|for|on|in)/i,
     
-    // People queries - WHO
+    // People queries - WHO (especially for presidents, leaders)
     /who (is|was|are|were|will be) /i,
     /who (won|is winning|leads?|runs?|owns?|founded|created|invented|discovered)/i,
     /who .+ (president|minister|ceo|leader|founder|owner|king|queen|chancellor|governor|mayor|chairman)/i,
+    /president of/i,
+    /current president/i,
+    /\b(president|prime minister|leader) of [a-zA-Z]+/i,
     
     // WHAT questions
     /what (is|are|was|were|happened|did|does|will)/i,
@@ -358,29 +452,29 @@ export function needsWebSearch(message: string): { needed: boolean; query: strin
     /how (many|much|old|tall|big|long|far|deep|wide|fast|slow|do|does|did|can|could|to)/i,
     /why (did|does|is|are|was|were|do|don't)/i,
     
-    // Year references
+    // Year references - 2024, 2025, 2026
     /(in |during |since |after |before )?(2024|2025|2026)/i,
-    /(this year|last year|next year|recently|lately)/i,
+    /(this year|last year|next year|recently|lately|currently)/i,
     
     // Real-time keywords
-    /\b(latest|current|recent|trending|happening|breaking|live|now|today)\b/i,
+    /\b(latest|current|recent|trending|happening|breaking|live|now|today|right now)\b/i,
     
     // Search intent
     /\b(search|look up|find out|tell me about|explain|describe|define|meaning of)\b/i,
-    /\b(check|verify|confirm|validate)\b/i,
+    /\b(check|verify|confirm|validate|lookup)\b/i,
     
-    // Explicit questions
+    // Explicit questions - any question
     /^(who|what|where|when|why|how|is|are|was|were|did|does|can|could|will|would|should) /i,
     /\?$/,
     
     // Crypto, stocks, finance
-    /\b(bitcoin|btc|ethereum|eth|crypto|stock|share|forex|dollar|euro|pound|naira)\b/i,
+    /\b(bitcoin|btc|ethereum|eth|crypto|stock|share|forex|dollar|euro|pound|naira|yen)\b/i,
     
     // Sports
-    /\b(match|game|score|tournament|league|championship|world cup|premier league|champions league)\b/i,
+    /\b(match|game|score|tournament|league|championship|world cup|premier league|champions league|nba|nfl|epl)\b/i,
     
     // Tech and products
-    /\b(iphone|android|windows|mac|google|apple|microsoft|amazon|tesla|openai|chatgpt)\b/i,
+    /\b(iphone|android|windows|mac|google|apple|microsoft|amazon|tesla|openai|chatgpt|ai model)\b/i,
     
     // Entertainment
     /\b(movie|film|show|series|album|song|artist|celebrity|actor|actress)\b.*(new|latest|released|coming)/i,
@@ -392,7 +486,10 @@ export function needsWebSearch(message: string): { needed: boolean; query: strin
     /\b(vs|versus|compared to|difference between|better than|worse than)\b/i,
     
     // Lists and rankings
-    /\b(top|best|worst|most|least|biggest|smallest|richest|poorest)\b/i,
+    /\b(top|best|worst|most|least|biggest|smallest|richest|poorest|highest|lowest)\b/i,
+    
+    // Countries and politics
+    /\b(government|election|vote|politics|policy|law|legislation)\b/i,
   ];
   
   for (const pattern of patterns) {
@@ -439,7 +536,7 @@ export async function performTavilySearch(query: string, apiKey: string): Promis
     });
 
     if (!response.ok) {
-      console.error('Tavily search failed:', response.status);
+      console.error('Tavily search failed:', response.status, await response.text());
       return { results: [] };
     }
 
@@ -471,20 +568,154 @@ export async function scrapeUrl(url: string, apiKey: string): Promise<string | n
         url,
         formats: ['markdown'],
         onlyMainContent: true,
-        waitFor: 3000,
-        timeout: 45000,
+        waitFor: 5000,
+        timeout: 60000,
       }),
     });
 
     if (!response.ok) {
-      console.error('Firecrawl scrape failed:', response.status);
+      console.error('Firecrawl scrape failed:', response.status, await response.text());
       return null;
     }
 
     const data = await response.json();
-    return data.data?.markdown || data.markdown || null;
+    const content = data.data?.markdown || data.markdown || null;
+    if (content) {
+      console.log('✅ Scraped', content.length, 'chars from', url);
+    }
+    return content;
   } catch (error) {
     console.error('URL scrape error:', error);
+    return null;
+  }
+}
+
+// Analyze image with Gemini Vision
+export async function analyzeImage(imageUrl: string, caption: string | undefined, apiKey: string): Promise<string | null> {
+  try {
+    console.log('🖼️ Analyzing image with Gemini Vision');
+    
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: AI_MODELS.vision,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { 
+                type: 'text', 
+                text: caption 
+                  ? `The user sent this image with the caption: "${caption}". Analyze and respond to their request. Be helpful and detailed.`
+                  : 'The user sent this image. Describe what you see in detail. What is shown? What are the key elements? Be helpful and informative.'
+              },
+              { type: 'image_url', image_url: { url: imageUrl } },
+            ],
+          },
+        ],
+        max_tokens: 1500,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Vision API error:', response.status, await response.text());
+      return null;
+    }
+    
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    console.log('✅ Image analyzed successfully');
+    return content || null;
+  } catch (error) {
+    console.error('Image analysis error:', error);
+    return null;
+  }
+}
+
+// Transcribe audio using ElevenLabs Speech-to-Text
+export async function transcribeAudio(audioUrl: string, elevenLabsKey: string): Promise<string | null> {
+  try {
+    console.log('🎤 Transcribing audio with ElevenLabs');
+    
+    // First download the audio
+    const audioResponse = await fetch(audioUrl);
+    if (!audioResponse.ok) {
+      console.error('Failed to download audio:', audioResponse.status);
+      return null;
+    }
+    
+    const audioBlob = await audioResponse.blob();
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'audio.ogg');
+    formData.append('model_id', 'scribe_v1');
+    formData.append('language_code', 'eng'); // Auto-detect or specific language
+    
+    const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+      method: 'POST',
+      headers: {
+        'xi-api-key': elevenLabsKey,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      console.error('ElevenLabs STT error:', response.status, await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const transcription = data.text || data.transcription;
+    console.log('✅ Audio transcribed:', transcription?.slice(0, 50) + '...');
+    return transcription || null;
+  } catch (error) {
+    console.error('Transcription error:', error);
+    return null;
+  }
+}
+
+// Generate voice response using ElevenLabs TTS
+export async function generateVoiceResponse(text: string, elevenLabsKey: string): Promise<ArrayBuffer | null> {
+  try {
+    console.log('🔊 Generating voice with ElevenLabs');
+    
+    // Use a good default voice - "Brian" which is natural sounding
+    const voiceId = 'nPczCjzI2devNBz1zQrb';
+    
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': elevenLabsKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: text.slice(0, 5000), // Limit text length
+          model_id: 'eleven_turbo_v2_5',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.3,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      console.error('ElevenLabs TTS error:', response.status, await response.text());
+      return null;
+    }
+
+    const audioBuffer = await response.arrayBuffer();
+    console.log('✅ Voice generated:', audioBuffer.byteLength, 'bytes');
+    return audioBuffer;
+  } catch (error) {
+    console.error('Voice generation error:', error);
     return null;
   }
 }
@@ -498,6 +729,8 @@ CURRENT DATE AND TIME:
 - Year: ${now.getFullYear()}
 - Month: ${now.toLocaleString('en-US', { month: 'long' })}
 - Day: ${now.toLocaleString('en-US', { weekday: 'long' })}, ${now.getDate()}
+
+IMPORTANT: It is currently ${now.getFullYear()}. When answering questions about current events, leaders, presidents, etc., use the most recent information available from web search results. Do NOT rely on training data that may be outdated.
 
 When users ask about time in specific locations, calculate it based on the timezone offset from UTC.`;
 }
@@ -520,25 +753,29 @@ ${getTimeContext()}
 CORE CAPABILITIES:
 ✅ Access LIVE web search via Tavily - you have REAL-TIME internet access
 ✅ Scrape and read ANY website including social media (Twitter/X, Instagram, YouTube, etc.)
-✅ Check social media profiles and handles directly
-✅ Provide accurate current information (news, prices, scores, events)
+✅ Check social media profiles and handles directly  
+✅ Provide accurate current information (news, prices, scores, events, who is president, etc.)
 ✅ Generate content (blogs, tweets, summaries, reports)
 ✅ Analyze images when provided
-✅ Understand voice messages (transcribed)
+✅ Transcribe and understand voice messages
 
 CRITICAL RULES:
 1. NEVER say you can't access websites or social media - YOU CAN via Firecrawl
-2. NEVER say you don't have current information - YOU DO via Tavily search
+2. NEVER say you don't have current information - YOU DO via Tavily search  
 3. When web search results are provided, USE THEM to give accurate answers
 4. ALWAYS cite sources with links when using web data
-5. For time queries, calculate based on the provided timezone data
-6. Be helpful, accurate, and engaging
+5. For time queries, use the calculated time from timezone data
+6. For questions about current leaders, presidents, etc., ALWAYS use the search results provided
+7. Be helpful, accurate, and engaging
+8. READ MESSAGES CAREFULLY - understand exactly what the user is asking before responding
 
 MEMORY & CONTEXT:
 - You REMEMBER the full conversation history
 - Refer back to previous messages naturally
-- Build on earlier discussions
-- Remember user preferences and language choices`;
+- Build on earlier discussions  
+- Remember user preferences and language choices
+- Stay consistent with what was discussed before
+- If user says to forget something, forget it and don't bring it up again`;
 
   let platformSpecific = '';
   
@@ -556,7 +793,7 @@ WHATSAPP-SPECIFIC RULES:
 
 SPECIAL COMMANDS USER CAN USE:
 - "save this conversation" - Acknowledge and confirm
-- "clear everything" / "forget everything" - Reset and start fresh
+- "clear everything" / "forget everything" - Reset and start fresh  
 - "let's speak in [language]" - Switch language permanently
 - "create poll: Question? Option1, Option2, Option3" - Create interactive poll
 - "help" - Show available commands`;
@@ -565,7 +802,7 @@ SPECIAL COMMANDS USER CAN USE:
 
 WEB INTERFACE RULES:
 - Use proper markdown formatting
-- Code blocks with syntax highlighting
+- Code blocks with syntax highlighting  
 - Tables when presenting structured data
 - Headers for organization
 - Bullet points and numbered lists`;
@@ -579,7 +816,7 @@ WEB INTERFACE RULES:
     pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', ar: 'Arabic',
     hi: 'Hindi', ru: 'Russian', it: 'Italian', nl: 'Dutch',
     ko: 'Korean', tr: 'Turkish', pl: 'Polish', sw: 'Swahili',
-    yo: 'Yoruba', ha: 'Hausa', ig: 'Igbo',
+    yo: 'Yoruba', ha: 'Hausa', ig: 'Igbo', pcm: 'Nigerian Pidgin',
   };
 
   languageInstruction = `\n\nLANGUAGE: ALWAYS respond in ${languageNames[lang] || 'English'}. This is the user's preferred language.`;
@@ -622,12 +859,10 @@ USER PREFERENCES:
 // Format WhatsApp message (convert markdown to WhatsApp format)
 export function formatForWhatsApp(text: string): string {
   return text
-    // Convert **bold** to *bold*
+    // Convert **bold** to *bold* (WhatsApp style)
     .replace(/\*\*([^*]+)\*\*/g, '*$1*')
     // Convert __bold__ to *bold*
     .replace(/__([^_]+)__/g, '*$1*')
-    // Keep single * for italics as _italics_
-    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '_$1_')
     // Convert ``` code blocks to readable format
     .replace(/```[a-z]*\n?([\s\S]*?)```/g, '「$1」')
     // Convert inline code
@@ -665,7 +900,7 @@ Here's what you can do:
 • "Save this conversation" - Bookmark chat
 • "Clear everything" - Start fresh
 
-📊 *Interactive*
+📊 *Interactive*  
 • "Create poll: Question? Option1, Option2, Option3"
 
 🎤 *Voice*
