@@ -52,6 +52,14 @@ interface GreenAPIMessage {
       jpegThumbnail?: string;
       contextInfo?: {
         mentionedJidList?: string[];
+        quotedMessage?: {
+          stanzaId?: string;
+          participant?: string;
+          conversation?: string;
+          extendedTextMessage?: {
+            text?: string;
+          };
+        };
       };
     };
     imageMessage?: {
@@ -73,8 +81,12 @@ interface GreenAPIMessage {
     quotedMessage?: {
       stanzaId: string;
       participant: string;
+      conversation?: string;
     };
   };
+  // For incoming calls
+  from?: string;
+  status?: string;
 }
 
 interface WhatsAppConversation {
@@ -329,22 +341,66 @@ async function updateConversationLanguage(supabase: any, conversationId: string,
     .eq('id', conversationId);
 }
 
-// Check if bot is mentioned in group
+// Check if bot is mentioned in group OR if the message is a reply to the bot's message
 function isBotMentioned(webhook: GreenAPIMessage, botWid: string): boolean {
+  // Check direct mentions in the mentionedJidList
   const mentionedList = webhook.messageData?.extendedTextMessageData?.contextInfo?.mentionedJidList;
   if (mentionedList && mentionedList.includes(botWid)) {
     return true;
   }
   
+  // Check if this is a reply to the bot's message (quoted message)
+  const quotedParticipant = webhook.messageData?.extendedTextMessageData?.contextInfo?.quotedMessage?.participant;
+  if (quotedParticipant && quotedParticipant === botWid) {
+    console.log('👥 Message is a reply to bot\'s message');
+    return true;
+  }
+  
+  // Also check the legacy quotedMessage format
+  const legacyQuoted = webhook.messageData?.quotedMessage?.participant;
+  if (legacyQuoted && legacyQuoted === botWid) {
+    console.log('👥 Message is a reply to bot\'s message (legacy format)');
+    return true;
+  }
+  
+  // Check for @mentions in text with phone number
   const messageText = webhook.messageData?.textMessageData?.textMessage || 
                       webhook.messageData?.extendedTextMessageData?.text || '';
   const lowerText = messageText.toLowerCase();
   
+  // Check for @phoenixai, @phoenix, or bot's number mentioned with @
   if (lowerText.includes('@phoenix') || lowerText.includes('phoenix ai') || lowerText.includes('hey phoenix')) {
     return true;
   }
   
+  // Check if the bot's phone number is mentioned with @ (e.g., @2341234567890)
+  if (botWid) {
+    const phoneNumber = botWid.replace('@c.us', '');
+    if (messageText.includes(`@${phoneNumber}`)) {
+      return true;
+    }
+  }
+  
   return false;
+}
+
+// Get context from quoted/replied message
+function getQuotedMessageContext(webhook: GreenAPIMessage): string | null {
+  const quotedMessage = webhook.messageData?.extendedTextMessageData?.contextInfo?.quotedMessage;
+  if (quotedMessage) {
+    const quotedText = quotedMessage.conversation || quotedMessage.extendedTextMessage?.text;
+    if (quotedText) {
+      return quotedText;
+    }
+  }
+  
+  // Check legacy format
+  const legacyQuoted = webhook.messageData?.quotedMessage;
+  if (legacyQuoted?.conversation) {
+    return legacyQuoted.conversation;
+  }
+  
+  return null;
 }
 
 // Check if chat is a group
@@ -496,6 +552,25 @@ Deno.serve(async (req) => {
     const webhook: GreenAPIMessage = await req.json();
     
     console.log('📱 Webhook:', webhook.typeWebhook, webhook.senderData?.chatId, 'Type:', webhook.messageData?.typeMessage);
+
+    // Handle incoming voice calls - inform user about voice call feature
+    if (webhook.typeWebhook === 'incomingCall') {
+      console.log('📞 Incoming call from:', webhook.from || webhook.senderData?.chatId);
+      const callerId = webhook.from || webhook.senderData?.chatId;
+      if (callerId && webhook.status === 'offer') {
+        // Send a message explaining voice call limitations
+        await sendMessage(
+          callerId,
+          "📞 *Incoming Call Detected*\n\nHey! I noticed you're trying to call me. WhatsApp voice calls can't be answered by AI yet, but I'm fully available here in chat! 🔥\n\nYou can:\n• Send me text messages\n• Send voice notes (I'll transcribe and respond)\n• Send images (I'll analyze them)\n\nI respond instantly! What can I help you with?",
+          idInstance,
+          apiToken
+        );
+      }
+      return new Response(
+        JSON.stringify({ status: 'handled', type: 'incomingCall' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     if (webhook.typeWebhook !== 'incomingMessageReceived') {
       return new Response(
@@ -813,15 +888,24 @@ Deno.serve(async (req) => {
     console.log(`🧠 Processing: ${senderName} (${history.length} messages in history)`);
     console.log(`📝 Message: "${messageText.slice(0, 100)}${messageText.length > 100 ? '...' : ''}"`);
 
-    // Save user message
-    await saveMessage(supabase, conversation.id, chatId, 'user', messageText);
+    // Get context from quoted/replied message if any
+    const quotedContext = getQuotedMessageContext(webhook);
+    let contextualMessage = messageText;
+    
+    if (quotedContext) {
+      console.log(`💬 Reply to: "${quotedContext.slice(0, 50)}..."`);
+      contextualMessage = `[Replying to: "${quotedContext.slice(0, 300)}"]\n\n${messageText}`;
+    }
+
+    // Save user message (including the reply context for clarity)
+    await saveMessage(supabase, conversation.id, chatId, 'user', contextualMessage);
 
     // Keep typing while processing
     sendTypingIndicator(chatId, idInstance, apiToken);
 
-    // Process with Phoenix AI
+    // Process with Phoenix AI - pass the full context
     const aiResponse = await processWithPhoenixAI(
-      messageText, 
+      contextualMessage, 
       senderName, 
       history,
       conversation.preferred_language
