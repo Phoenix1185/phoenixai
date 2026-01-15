@@ -368,20 +368,38 @@ async function getOrCreateConversation(
   return newConv;
 }
 
-// Get conversation history
+// Get conversation history - get RECENT messages in chronological order
 async function getConversationHistory(
   supabase: any, 
   chatId: string, 
-  limit: number = 30
+  limit: number = 20  // Reduced to 20 for better context management
 ): Promise<ConversationMessage[]> {
-  const { data: messages } = await supabase
+  // First get the most recent messages in descending order
+  const { data: messages, error } = await supabase
     .from('whatsapp_messages')
-    .select('role, content')
+    .select('role, content, created_at')
     .eq('chat_id', chatId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
-  return messages || [];
+  if (error) {
+    console.error('Error fetching conversation history:', error);
+    return [];
+  }
+
+  if (!messages || messages.length === 0) {
+    return [];
+  }
+
+  // Reverse to get chronological order (oldest first for AI context)
+  // This ensures we have the MOST RECENT messages, not the oldest
+  const chronological = messages.reverse().map((m: any) => ({
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+  }));
+
+  console.log(`📚 Loaded ${chronological.length} messages from history`);
+  return chronological;
 }
 
 // Save message
