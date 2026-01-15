@@ -9,6 +9,8 @@ import {
   isTimeQuery,
   getTimeForLocation,
   extractSocialMediaQuery,
+  detectImageGenerationRequest,
+  generateImage,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -116,6 +118,58 @@ Deno.serve(async (req) => {
         const stream = new ReadableStream({
           start(controller) {
             const data = `data: ${JSON.stringify({ choices: [{ delta: { content: `🕐 ${timeInfo}` } }] })}\n\n`;
+            controller.enqueue(encoder.encode(data));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        
+        return new Response(stream, {
+          headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
+        });
+      }
+    }
+
+    // Check for image generation request
+    const imageRequest = detectImageGenerationRequest(lastUserMessage);
+    if (imageRequest.shouldGenerate) {
+      console.log('🎨 Web image generation request detected');
+      
+      const result = await generateImage(
+        imageRequest.prompt, 
+        imageRequest.quality, 
+        lovableApiKey
+      );
+      
+      if (result.success && result.imageBase64) {
+        // Return image as a streamed response
+        const imageResponse = `🎨 **Here's your generated image:**\n\n![Generated Image](data:image/png;base64,${result.imageBase64})\n\n_Prompt: "${imageRequest.prompt}"_`;
+        
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            const data = `data: ${JSON.stringify({ 
+              choices: [{ 
+                delta: { content: imageResponse }
+              }] 
+            })}\n\n`;
+            controller.enqueue(encoder.encode(data));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        
+        return new Response(stream, {
+          headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
+        });
+      } else {
+        // Generation failed - return error message
+        const errorResponse = `😔 I couldn't generate that image. ${result.error || 'Please try again with a different description.'}`;
+        
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            const data = `data: ${JSON.stringify({ choices: [{ delta: { content: errorResponse } }] })}\n\n`;
             controller.enqueue(encoder.encode(data));
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             controller.close();
