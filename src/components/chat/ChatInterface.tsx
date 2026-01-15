@@ -333,7 +333,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter key should NOT send - only Ctrl+Enter or Cmd+Enter sends
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -450,7 +451,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={user ? "Ask Phoenix anything..." : "Sign in to start chatting..."}
+              placeholder={user ? "Ask Phoenix anything... (Ctrl+Enter to send)" : "Sign in to start chatting..."}
               disabled={!user || isLoading}
               className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-28 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
