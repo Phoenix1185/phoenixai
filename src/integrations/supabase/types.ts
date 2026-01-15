@@ -73,6 +73,45 @@ export type Database = {
           },
         ]
       }
+      knowledge_base: {
+        Row: {
+          category: string | null
+          confidence_score: number | null
+          created_at: string
+          created_by: string | null
+          id: string
+          query_pattern: string
+          source_url: string | null
+          updated_at: string
+          usage_count: number | null
+          verified_answer: string
+        }
+        Insert: {
+          category?: string | null
+          confidence_score?: number | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          query_pattern: string
+          source_url?: string | null
+          updated_at?: string
+          usage_count?: number | null
+          verified_answer: string
+        }
+        Update: {
+          category?: string | null
+          confidence_score?: number | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          query_pattern?: string
+          source_url?: string | null
+          updated_at?: string
+          usage_count?: number | null
+          verified_answer?: string
+        }
+        Relationships: []
+      }
       messages: {
         Row: {
           content: string

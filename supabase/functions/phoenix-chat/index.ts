@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   UserPreferences,
+  ConversationMessage,
   needsWebSearch,
   performTavilySearch,
   scrapeUrl,
@@ -11,6 +12,11 @@ import {
   extractSocialMediaQuery,
   detectImageGenerationRequest,
   generateImage,
+  searchKnowledgeBase,
+  saveToKnowledgeBase,
+  detectCorrection,
+  extractQueryPattern,
+  learnFromWebSearch,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -199,6 +205,25 @@ Deno.serve(async (req) => {
 
     let webContext = '';
 
+    // FIRST: Check knowledge base for cached/learned information
+    const knowledgeEntry = await searchKnowledgeBase(supabase, lastUserMessage);
+    if (knowledgeEntry) {
+      console.log('📚 Using knowledge base entry:', knowledgeEntry.query_pattern);
+      webContext += `\n\n📚 **VERIFIED KNOWLEDGE (previously learned):**\n${knowledgeEntry.verified_answer}`;
+      if (knowledgeEntry.source_url) {
+        webContext += `\n*Source: ${knowledgeEntry.source_url}*`;
+      }
+    }
+
+    // Check if user is making a correction (teaching the AI)
+    const correctionCheck = detectCorrection(lastUserMessage);
+    if (correctionCheck.isCorrection && correctionCheck.correctedInfo) {
+      console.log('🧠 User correction detected, saving to knowledge base');
+      const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, messages as ConversationMessage[]);
+      await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
+      webContext += `\n\n✅ **LEARNING:** I've saved this correction and will remember it for all future conversations.`;
+    }
+
     // Handle URL scraping
     const urls = extractUrls(lastUserMessage);
     if (urls.length > 0 && firecrawlApiKey) {
@@ -231,11 +256,14 @@ Deno.serve(async (req) => {
         for (const result of searchResults.results.slice(0, 5)) {
           webContext += `\n• **${result.title}**\n${result.content.slice(0, 500)}\nSource: ${result.url}\n`;
         }
+        
+        // Auto-learn from search results
+        await learnFromWebSearch(supabase, socialQuery.query, searchResults, 'social_media');
       }
     }
 
-    // Handle general web search
-    if (searchCheck.needed && !socialQuery && tavilyApiKey && webContext.length < 1000) {
+    // Handle general web search - ALWAYS search if proper nouns detected or factual query
+    if (searchCheck.needed && !socialQuery && tavilyApiKey && (!knowledgeEntry || webContext.length < 500)) {
       console.log('🔍 Performing general search:', searchCheck.query);
       const searchResults = await performTavilySearch(searchCheck.query, tavilyApiKey);
       
@@ -247,6 +275,9 @@ Deno.serve(async (req) => {
         for (const result of searchResults.results.slice(0, 6)) {
           webContext += `\n### ${result.title}\n${result.content.slice(0, 800)}\n*Source: ${result.url}*\n`;
         }
+        
+        // Auto-learn from search results
+        await learnFromWebSearch(supabase, searchCheck.query, searchResults, 'web_search');
       }
     }
 

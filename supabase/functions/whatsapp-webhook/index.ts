@@ -20,6 +20,11 @@ import {
   generateVoiceResponse,
   detectImageGenerationRequest,
   generateImage,
+  searchKnowledgeBase,
+  saveToKnowledgeBase,
+  detectCorrection,
+  extractQueryPattern,
+  learnFromWebSearch,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -524,7 +529,8 @@ async function processWithPhoenixAI(
   senderName: string,
   conversationHistory: ConversationMessage[],
   preferredLanguage?: string,
-  messageContext?: string
+  messageContext?: string,
+  supabase?: any
 ): Promise<string> {
   const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
   const tavilyApiKey = Deno.env.get('TAVILY_API_KEY');
@@ -538,6 +544,27 @@ async function processWithPhoenixAI(
   });
 
   let webContext = messageContext || '';
+
+  // FIRST: Check knowledge base for cached/learned information
+  if (supabase) {
+    const knowledgeEntry = await searchKnowledgeBase(supabase, message);
+    if (knowledgeEntry) {
+      console.log('📚 Using knowledge base entry:', knowledgeEntry.query_pattern);
+      webContext += `\n\n📚 VERIFIED KNOWLEDGE (previously learned):\n${knowledgeEntry.verified_answer}`;
+      if (knowledgeEntry.source_url) {
+        webContext += `\nSource: ${knowledgeEntry.source_url}`;
+      }
+    }
+
+    // Check if user is making a correction (teaching the AI)
+    const correctionCheck = detectCorrection(message);
+    if (correctionCheck.isCorrection && correctionCheck.correctedInfo) {
+      console.log('🧠 User correction detected, saving to knowledge base');
+      const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, conversationHistory);
+      await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
+      webContext += `\n\n✅ LEARNING: I've saved this correction and will remember it for all future conversations.`;
+    }
+  }
 
   // Check for time queries first
   const timeCheck = isTimeQuery(message);
@@ -572,10 +599,15 @@ async function processWithPhoenixAI(
       for (const r of results.results.slice(0, 5)) {
         webContext += `• ${r.title}: ${r.content.slice(0, 400)}\nSource: ${r.url}\n\n`;
       }
+      
+      // Auto-learn from search results
+      if (supabase) {
+        await learnFromWebSearch(supabase, socialQuery.query, results, 'social_media');
+      }
     }
   }
 
-  // Check for general search needs
+  // Check for general search needs - ALWAYS search for proper nouns/entities
   const searchCheck = needsWebSearch(message);
   if (searchCheck.needed && !socialQuery && tavilyApiKey && webContext.length < 500) {
     console.log('🔍 General search:', searchCheck.query);
@@ -585,6 +617,11 @@ async function processWithPhoenixAI(
       if (results.answer) webContext += `Quick Answer: ${results.answer}\n\n`;
       for (const r of results.results.slice(0, 6)) {
         webContext += `• ${r.title}: ${r.content.slice(0, 500)}\nSource: ${r.url}\n\n`;
+      }
+      
+      // Auto-learn from search results
+      if (supabase) {
+        await learnFromWebSearch(supabase, searchCheck.query, results, 'web_search');
       }
     }
   }
@@ -775,7 +812,8 @@ Deno.serve(async (req) => {
             senderName,
             history,
             conversation.preferred_language,
-            `\n\n🖼️ IMAGE ANALYSIS:\n${imageAnalysis}`
+            `\n\n🖼️ IMAGE ANALYSIS:\n${imageAnalysis}`,
+            supabase
           );
         } else {
           finalResponse = `🖼️ *Image Analysis:*\n\n${imageAnalysis}`;
@@ -858,7 +896,9 @@ Deno.serve(async (req) => {
           transcription,
           senderName,
           history,
-          conversation.preferred_language
+          conversation.preferred_language,
+          undefined,
+          supabase
         );
 
         await saveMessage(supabase, conversation.id, chatId, 'assistant', aiResponse);
@@ -1076,7 +1116,9 @@ Deno.serve(async (req) => {
         contextualMessage, 
         senderName, 
         history,
-        conversation.preferred_language
+        conversation.preferred_language,
+        undefined,
+        supabase
       );
     } catch (error) {
       console.error('AI processing failed:', error);

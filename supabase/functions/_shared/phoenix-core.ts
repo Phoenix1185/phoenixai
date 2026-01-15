@@ -455,20 +455,44 @@ export function parseCommand(message: string): CommandResult {
   return { isCommand: false };
 }
 
-// Detect if message is casual/conversational (shouldn't trigger web search)
-function isCasualMessage(message: string): boolean {
-  const lowerMsg = message.toLowerCase().trim();
-  const msgLength = message.length;
+// Detect if a message contains a proper noun (capitalized word that's not at start)
+function containsProperNoun(message: string): boolean {
+  // Split into words and check for capitalized words (not at sentence start)
+  const words = message.split(/\s+/);
   
-  // Very short messages without question words are usually casual
-  if (msgLength < 20 && !/\b(who|what|where|when|why|how|which)\b/i.test(message)) {
-    // Check if it's NOT a specific query
-    if (!/\b(price|weather|news|score|result|president|time in)\b/i.test(lowerMsg)) {
+  // Single capitalized word is likely a proper noun/entity
+  if (words.length === 1 && /^[A-Z][a-zA-Z]{2,}$/.test(message)) {
+    return true;
+  }
+  
+  // Check for capitalized words in the middle of sentences
+  for (let i = 1; i < words.length; i++) {
+    if (/^[A-Z][a-zA-Z]{2,}$/.test(words[i])) {
       return true;
     }
   }
   
-  // Greetings and casual patterns
+  // Check for all-caps words (acronyms like RUGIPO, NASA, etc.)
+  for (const word of words) {
+    if (/^[A-Z]{3,}$/.test(word)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Detect if message is casual/conversational (shouldn't trigger web search)
+function isCasualMessage(message: string): boolean {
+  const lowerMsg = message.toLowerCase().trim();
+  
+  // If it contains a proper noun or acronym, it's NOT casual - needs search
+  if (containsProperNoun(message)) {
+    console.log('📌 Proper noun/acronym detected, will search:', message);
+    return false;
+  }
+  
+  // Greetings and casual patterns - must be EXACT matches
   const casualPatterns = [
     /^(hi|hey|hello|sup|yo|waddup|wassup|hola|hii+|heya?)(\s|!|,|\.)*$/i,
     /^(good\s)?(morning|afternoon|evening|night)(\s|!|,|\.)*$/i,
@@ -484,7 +508,6 @@ function isCasualMessage(message: string): boolean {
     /^(what'?s? up|how are you|how r u|how u doin|how's it going)\?*$/i,
     /^(nothing much|not much|nm|chillin|chilling)(\s|!|,|\.)*$/i,
     /^(👋|🙏|❤️|🔥|👍|👎|😊|😁|😎)+$/,
-    /^(kwn|ikwym|ywn|fella|styl)\?*$/i, // Nigerian/internet slang
   ];
   
   for (const pattern of casualPatterns) {
@@ -655,7 +678,199 @@ export async function performTavilySearch(query: string, apiKey: string): Promis
   }
 }
 
-// Scrape URL with Firecrawl - works for ANY website including social media
+// ===========================================
+// GLOBAL KNOWLEDGE BASE FUNCTIONS
+// ===========================================
+
+export interface KnowledgeEntry {
+  id: string;
+  query_pattern: string;
+  verified_answer: string;
+  source_url?: string;
+  category: string;
+  confidence_score: number;
+  usage_count: number;
+}
+
+// Detect if user is making a correction (teaching the AI)
+export function detectCorrection(
+  userMessage: string, 
+  previousAssistantMessage?: string
+): { isCorrection: boolean; correctedInfo?: string } {
+  const lowerMsg = userMessage.toLowerCase();
+  
+  // Patterns that indicate the user is correcting the AI
+  const correctionPatterns = [
+    /^no,?\s*(actually|it'?s|that'?s|the answer is)/i,
+    /^wrong[,.]?\s*/i,
+    /^incorrect[,.]?\s*/i,
+    /^that'?s not (right|correct|true)/i,
+    /^actually[,.]?\s*/i,
+    /^the (correct|right|true) (answer|information|info) is/i,
+    /^not exactly[,.]?\s*/i,
+    /^you'?re wrong/i,
+    /^you got (it|that) wrong/i,
+    /^let me correct (you|that)/i,
+    /^(save|learn|remember) this/i,
+    /^(it|he|she|they) (is|are|was|were) (actually|really)/i,
+  ];
+  
+  for (const pattern of correctionPatterns) {
+    if (pattern.test(lowerMsg)) {
+      // Extract the correction content
+      const correctedInfo = userMessage
+        .replace(/^(no,?\s*|wrong[,.]?\s*|incorrect[,.]?\s*|actually[,.]?\s*|that'?s not right[,.]?\s*|the correct answer is\s*|let me correct you[,.]?\s*|save this[,.]?\s*|learn this[,.]?\s*|remember this[,.]?\s*)/i, '')
+        .trim();
+      
+      if (correctedInfo.length > 10) {
+        return { isCorrection: true, correctedInfo };
+      }
+    }
+  }
+  
+  return { isCorrection: false };
+}
+
+// Extract the topic/entity being corrected from context
+export function extractQueryPattern(correctedInfo: string, previousMessages: ConversationMessage[]): string {
+  // Try to extract the main subject from the correction
+  // Look for patterns like "X is Y" or "The answer is Y"
+  
+  const isMatch = correctedInfo.match(/^(.+?)\s+(?:is|are|was|were)\s+/i);
+  if (isMatch && isMatch[1].length > 2 && isMatch[1].length < 100) {
+    return isMatch[1].toLowerCase().trim();
+  }
+  
+  // Look at recent messages to find what was being asked
+  for (let i = previousMessages.length - 1; i >= 0 && i >= previousMessages.length - 4; i--) {
+    const msg = previousMessages[i];
+    if (msg.role === 'user') {
+      // Extract entities/keywords from the original question
+      const words = msg.content.split(/\s+/).filter(w => 
+        w.length > 3 && 
+        /^[A-Z]/.test(w) || // Capitalized
+        /^[A-Z]{2,}$/.test(w) // Acronym
+      );
+      if (words.length > 0) {
+        return words.join(' ').toLowerCase();
+      }
+    }
+  }
+  
+  // Fallback: use first significant words of the correction
+  const words = correctedInfo.split(/\s+/).slice(0, 5).join(' ').toLowerCase();
+  return words;
+}
+
+// Search knowledge base for relevant entries
+export async function searchKnowledgeBase(
+  supabase: any,
+  query: string
+): Promise<KnowledgeEntry | null> {
+  try {
+    const searchTerms = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    
+    if (searchTerms.length === 0) return null;
+    
+    // Search using text search
+    const { data, error } = await supabase
+      .from('knowledge_base')
+      .select('*')
+      .or(searchTerms.map(term => `query_pattern.ilike.%${term}%`).join(','))
+      .order('usage_count', { ascending: false })
+      .limit(1);
+    
+    if (error) {
+      console.error('Knowledge base search error:', error);
+      return null;
+    }
+    
+    if (data && data.length > 0) {
+      console.log('📚 Found knowledge base entry:', data[0].query_pattern);
+      
+      // Increment usage count
+      await supabase
+        .from('knowledge_base')
+        .update({ usage_count: data[0].usage_count + 1 })
+        .eq('id', data[0].id);
+      
+      return data[0] as KnowledgeEntry;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Knowledge base search error:', error);
+    return null;
+  }
+}
+
+// Save a correction to the knowledge base
+export async function saveToKnowledgeBase(
+  supabase: any,
+  queryPattern: string,
+  verifiedAnswer: string,
+  sourceUrl?: string,
+  category: string = 'general'
+): Promise<boolean> {
+  try {
+    console.log('💾 Saving to knowledge base:', queryPattern);
+    
+    // Upsert - update if exists, insert if not
+    const { error } = await supabase
+      .from('knowledge_base')
+      .upsert({
+        query_pattern: queryPattern.toLowerCase(),
+        verified_answer: verifiedAnswer,
+        source_url: sourceUrl,
+        category,
+        confidence_score: 1.0,
+        usage_count: 1,
+        created_by: 'user_correction',
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'query_pattern',
+        ignoreDuplicates: false,
+      });
+    
+    if (error) {
+      console.error('Knowledge base save error:', error);
+      return false;
+    }
+    
+    console.log('✅ Saved to knowledge base successfully');
+    return true;
+  } catch (error) {
+    console.error('Knowledge base save error:', error);
+    return false;
+  }
+}
+
+// Store web search results as knowledge (auto-learning from verified sources)
+export async function learnFromWebSearch(
+  supabase: any,
+  query: string,
+  searchResults: { results: SearchResult[]; answer?: string },
+  category: string = 'web_search'
+): Promise<void> {
+  try {
+    // Only store if we got a clear answer
+    if (!searchResults.answer || searchResults.answer.length < 20) return;
+    
+    const sourceUrl = searchResults.results[0]?.url;
+    
+    await saveToKnowledgeBase(
+      supabase,
+      query.toLowerCase(),
+      searchResults.answer,
+      sourceUrl,
+      category
+    );
+  } catch (error) {
+    console.error('Auto-learn error:', error);
+  }
+}
+
+
 export async function scrapeUrl(url: string, apiKey: string): Promise<string | null> {
   try {
     console.log('📄 Scraping URL:', url);
