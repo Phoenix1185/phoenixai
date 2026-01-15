@@ -368,13 +368,14 @@ async function getOrCreateConversation(
   return newConv;
 }
 
-// Get conversation history - get RECENT messages in chronological order
+// Get conversation history for AI context (recent messages only for token limits)
+// Note: ALL messages are STORED permanently - this just limits what's sent to AI
 async function getConversationHistory(
   supabase: any, 
   chatId: string, 
-  limit: number = 20  // Reduced to 20 for better context management
+  limit: number = 50  // Get last 50 messages for AI context
 ): Promise<ConversationMessage[]> {
-  // First get the most recent messages in descending order
+  // Get the most recent messages in descending order
   const { data: messages, error } = await supabase
     .from('whatsapp_messages')
     .select('role, content, created_at')
@@ -392,17 +393,16 @@ async function getConversationHistory(
   }
 
   // Reverse to get chronological order (oldest first for AI context)
-  // This ensures we have the MOST RECENT messages, not the oldest
   const chronological = messages.reverse().map((m: any) => ({
     role: m.role as 'user' | 'assistant',
     content: m.content,
   }));
 
-  console.log(`📚 Loaded ${chronological.length} messages from history`);
+  console.log(`📚 Loaded ${chronological.length} messages for AI context (all messages stored permanently)`);
   return chronological;
 }
 
-// Save message
+// Save message - ALL messages are stored permanently
 async function saveMessage(
   supabase: any,
   conversationId: string,
@@ -410,12 +410,16 @@ async function saveMessage(
   role: 'user' | 'assistant',
   content: string
 ): Promise<void> {
-  await supabase.from('whatsapp_messages').insert({
+  const { error } = await supabase.from('whatsapp_messages').insert({
     conversation_id: conversationId,
     chat_id: chatId,
     role,
     content,
   });
+  
+  if (error) {
+    console.error('Error saving message:', error);
+  }
 }
 
 // Clear conversation history
