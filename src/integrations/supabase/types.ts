@@ -194,6 +194,7 @@ export type Database = {
           chat_id: string
           created_at: string
           id: string
+          preferred_language: string | null
           sender_name: string | null
           updated_at: string
         }
@@ -201,6 +202,7 @@ export type Database = {
           chat_id: string
           created_at?: string
           id?: string
+          preferred_language?: string | null
           sender_name?: string | null
           updated_at?: string
         }
@@ -208,6 +210,7 @@ export type Database = {
           chat_id?: string
           created_at?: string
           id?: string
+          preferred_language?: string | null
           sender_name?: string | null
           updated_at?: string
         }
