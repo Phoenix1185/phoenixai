@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX } from 'lucide-react';
+import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX, Download, ZoomIn } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import ImageViewer from './ImageViewer';
 
 interface Message {
   id: string;
@@ -30,6 +31,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   isStreaming = false 
 }) => {
   const [copied, setCopied] = useState(false);
+  const [viewerImage, setViewerImage] = useState<{ src: string; alt: string } | null>(null);
   const { toast } = useToast();
   const isUser = message.role === 'user';
 
@@ -150,8 +152,17 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     });
   };
 
+  const handleDownload = (src: string) => {
+    const link = document.createElement('a');
+    link.href = src;
+    link.download = `phoenix-image-${Date.now()}.png`;
+    link.click();
+    toast({ description: 'Image downloading...', duration: 2000 });
+  };
+
   const renderContent = (content: string) => {
-    const imageRegex = /!\[([^\]]*)\]\((data:image\/[^;]+;base64,[^\)]+)\)/g;
+    // Match both markdown images and also plain base64 images
+    const imageRegex = /!\[([^\]]*)\]\((data:image\/[^;]+;base64,[^\)]+|https?:\/\/[^\)]+)\)/g;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match;
@@ -163,13 +174,56 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       
       const alt = match[1] || 'Generated Image';
       const src = match[2];
+      
       parts.push(
-        <div key={`img-${match.index}`} className="my-4">
-          <img src={src} alt={alt} className="max-w-full rounded-lg shadow-lg cursor-pointer hover:scale-[1.02] transition-transform" onClick={() => window.open(src, '_blank')} />
-          <Button variant="ghost" size="sm" className="text-xs mt-2" onClick={() => { const link = document.createElement('a'); link.href = src; link.download = 'phoenix-image.png'; link.click(); }}>
-            📥 Download
-          </Button>
-        </div>
+        <motion.div 
+          key={`img-${match.index}`} 
+          className="my-4"
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.3 }}
+        >
+          <div className="relative group rounded-xl overflow-hidden shadow-lg border border-border/50">
+            <img 
+              src={src} 
+              alt={alt} 
+              className="max-w-full max-h-[400px] object-contain cursor-pointer transition-transform group-hover:scale-[1.02]"
+              onClick={() => setViewerImage({ src, alt })}
+            />
+            {/* Overlay actions */}
+            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex items-center justify-end gap-2">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="secondary" 
+                      size="icon" 
+                      className="h-8 w-8 bg-white/20 hover:bg-white/30 backdrop-blur-sm"
+                      onClick={(e) => { e.stopPropagation(); setViewerImage({ src, alt }); }}
+                    >
+                      <ZoomIn className="h-4 w-4 text-white" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Expand</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="secondary" 
+                      size="icon"
+                      className="h-8 w-8 bg-white/20 hover:bg-white/30 backdrop-blur-sm"
+                      onClick={(e) => { e.stopPropagation(); handleDownload(src); }}
+                    >
+                      <Download className="h-4 w-4 text-white" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Download</TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2 text-center italic">{alt}</p>
+        </motion.div>
       );
       lastIndex = match.index + match[0].length;
     }
@@ -209,6 +263,16 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       </motion.div>
 
       {isUser && <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 shadow-sm"><span className="text-xs font-medium">You</span></div>}
+      
+      {/* Image viewer modal */}
+      {viewerImage && (
+        <ImageViewer
+          src={viewerImage.src}
+          alt={viewerImage.alt}
+          isOpen={!!viewerImage}
+          onClose={() => setViewerImage(null)}
+        />
+      )}
     </motion.div>
   );
 };

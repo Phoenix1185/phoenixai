@@ -9,6 +9,8 @@ import TypingIndicator from './TypingIndicator';
 import StreamingIndicator from './StreamingIndicator';
 import QuickActions from './QuickActions';
 import PhoenixLoader from './PhoenixLoader';
+import PhoenixBootAnimation from './PhoenixBootAnimation';
+import ImageGenerationLoader from './ImageGenerationLoader';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
@@ -42,6 +44,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isStreaming, setIsStreaming] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<{ file: File; preview: string } | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [showBootAnimation, setShowBootAnimation] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);

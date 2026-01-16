@@ -6,8 +6,14 @@ verify_jwt = false
 [functions.whatsapp-webhook]
 verify_jwt = false
 
+[functions.telegram-webhook]
+verify_jwt = false
+
 [functions.firecrawl-scrape]
 verify_jwt = false
 
 [functions.firecrawl-search]
+verify_jwt = false
+
+[functions.elevenlabs-conversation-token]
 verify_jwt = false
