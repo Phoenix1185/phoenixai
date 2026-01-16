@@ -291,10 +291,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
     }
 
-    // Create display message
-    const displayContent = hasImage 
-      ? `${userMessage || 'Sent an image'}${hasImage ? '\n\n[Image attached]' : ''}`
-      : userMessage;
+    // Create display message with image if present
+    let displayContent = userMessage;
+    if (hasImage && imageBase64) {
+      // Include the image in the message content so it shows in chat
+      const imageMarkdown = `\n\n![Uploaded Image](${imageBase64})`;
+      displayContent = `${userMessage || 'Sent an image'}${imageMarkdown}`;
+    }
 
     // Add user message
     const tempUserMessage: Message = {
@@ -325,8 +328,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
     }
 
-    // Start streaming
+    // Check if this looks like an image generation request
+    const isImageGenRequest = /generate|create|make|draw|design|paint|imagine|visualize|illustrate/i.test(userMessage) &&
+      /image|picture|photo|art|artwork|illustration|graphic|logo|banner/i.test(userMessage);
+
+    // Show boot animation for first message in conversation
+    if (messages.length === 0 && !showBootAnimation) {
+      setShowBootAnimation(true);
+    }
+
+    // Start streaming - show image generation loader if needed
     setIsStreaming(true);
+    if (isImageGenRequest) {
+      setIsGeneratingImage(true);
+    }
     let assistantContent = '';
 
     // Limit context to last N messages to prevent confusion
@@ -336,6 +351,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
+      // Once we get content, hide the image generation loader
+      if (assistantContent.length > 0) {
+        setIsGeneratingImage(false);
+      }
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
@@ -359,7 +378,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         async (fullText: string) => {
           setIsStreaming(false);
           setIsLoading(false);
-
+          setIsGeneratingImage(false);
+          setShowBootAnimation(false);
           // Auto-speak if enabled
           if (autoSpeak && voiceOutputSupported && fullText) {
             const plainText = fullText
@@ -408,6 +428,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }]);
       setIsStreaming(false);
       setIsLoading(false);
+      setIsGeneratingImage(false);
+      setShowBootAnimation(false);
     }
   };
 
@@ -486,6 +508,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         ) : (
           <div className="space-y-4 max-w-4xl mx-auto">
+            {/* Boot animation for first message */}
+            {showBootAnimation && messages.length === 1 && (
+              <PhoenixBootAnimation 
+                userName={displayName !== 'User' ? displayName : undefined}
+                onComplete={() => setShowBootAnimation(false)}
+              />
+            )}
+            
             {messages.map((message) => (
               <ChatMessage
                 key={message.id}
@@ -496,7 +526,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 isStreaming={isStreaming && message.id.startsWith('stream-')}
               />
             ))}
-            {isLoading && !isStreaming && <TypingIndicator />}
+            
+            {/* Image generation loader */}
+            {isGeneratingImage && (
+              <div className="flex justify-start gap-3">
+                <div className="w-8 h-8 rounded-lg gradient-phoenix flex items-center justify-center shrink-0 shadow-lg">
+                  <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4 text-primary-foreground animate-pulse">
+                    <path d="M12 2C12 2 9 6 9 10C9 14 12 16 12 16C12 16 15 14 15 10C15 6 12 2 12 2Z" fill="currentColor" />
+                  </svg>
+                </div>
+                <ImageGenerationLoader />
+              </div>
+            )}
+            
+            {isLoading && !isStreaming && !isGeneratingImage && <TypingIndicator />}
             <div ref={messagesEndRef} />
           </div>
         )}
