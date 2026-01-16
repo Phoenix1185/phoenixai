@@ -76,10 +76,14 @@ export type Database = {
       knowledge_base: {
         Row: {
           category: string | null
+          confidence: string | null
           confidence_score: number | null
           created_at: string
           created_by: string | null
+          expires_at: string | null
+          fetch_source: string | null
           id: string
+          is_expired: boolean | null
           query_pattern: string
           source_url: string | null
           updated_at: string
@@ -88,10 +92,14 @@ export type Database = {
         }
         Insert: {
           category?: string | null
+          confidence?: string | null
           confidence_score?: number | null
           created_at?: string
           created_by?: string | null
+          expires_at?: string | null
+          fetch_source?: string | null
           id?: string
+          is_expired?: boolean | null
           query_pattern: string
           source_url?: string | null
           updated_at?: string
@@ -100,15 +108,55 @@ export type Database = {
         }
         Update: {
           category?: string | null
+          confidence?: string | null
           confidence_score?: number | null
           created_at?: string
           created_by?: string | null
+          expires_at?: string | null
+          fetch_source?: string | null
           id?: string
+          is_expired?: boolean | null
           query_pattern?: string
           source_url?: string | null
           updated_at?: string
           usage_count?: number | null
           verified_answer?: string
+        }
+        Relationships: []
+      }
+      learning_patterns: {
+        Row: {
+          created_at: string | null
+          effectiveness_score: number | null
+          id: string
+          improvement_applied: string
+          pattern_description: string
+          pattern_type: string
+          trigger_context: string | null
+          updated_at: string | null
+          usage_count: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          effectiveness_score?: number | null
+          id?: string
+          improvement_applied: string
+          pattern_description: string
+          pattern_type: string
+          trigger_context?: string | null
+          updated_at?: string | null
+          usage_count?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          effectiveness_score?: number | null
+          id?: string
+          improvement_applied?: string
+          pattern_description?: string
+          pattern_type?: string
+          trigger_context?: string | null
+          updated_at?: string | null
+          usage_count?: number | null
         }
         Relationships: []
       }
