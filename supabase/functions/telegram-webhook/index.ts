@@ -266,8 +266,34 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Handle GET requests (browser visits, health checks)
+  if (req.method === 'GET') {
+    return new Response(JSON.stringify({ 
+      status: 'ok', 
+      message: 'Phoenix Telegram Bot is running! 🔥',
+      webhook: true 
+    }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
-    const update: TelegramUpdate = await req.json();
+    // Check if request has a body
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return new Response(JSON.stringify({ ok: true, message: 'No JSON body' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const body = await req.text();
+    if (!body || body.trim() === '') {
+      return new Response(JSON.stringify({ ok: true, message: 'Empty body' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const update: TelegramUpdate = JSON.parse(body);
     console.log('📱 Telegram update:', JSON.stringify(update).slice(0, 500));
 
     const message = update.message || update.edited_message;
