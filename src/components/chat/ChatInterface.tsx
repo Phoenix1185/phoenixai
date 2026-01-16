@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Loader2, Sparkles, Mic, MicOff } from 'lucide-react';
+import { Send, Loader2, Sparkles, Mic, MicOff, ImagePlus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,6 +30,7 @@ interface ChatInterfaceProps {
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/phoenix-chat`;
+const MAX_CONTEXT_MESSAGES = 15; // Limit context to prevent confusion
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   conversationId, 
@@ -40,10 +41,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
+  const [uploadedImage, setUploadedImage] = useState<{ file: File; preview: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Get display name from user metadata
+  const displayName = user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'User';
 
   // Voice hooks
   const { 
@@ -97,22 +103,42 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Convert file to base64
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+    });
+  };
+
   const streamChat = useCallback(async (
-    chatMessages: { role: string; content: string }[],
+    chatMessages: { role: string; content: string | any[] }[],
     onDelta: (deltaText: string) => void,
-    onDone: (fullText: string) => void
+    onDone: (fullText: string) => void,
+    imageUrl?: string,
+    imagePrompt?: string
   ) => {
+    const body: any = { 
+      messages: chatMessages,
+      userId: user?.id,
+      conversationId,
+      userName: displayName,
+    };
+
+    if (imageUrl) {
+      body.imageUrl = imageUrl;
+      body.imagePrompt = imagePrompt;
+    }
+
     const resp = await fetch(CHAT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
       },
-      body: JSON.stringify({ 
-        messages: chatMessages,
-        userId: user?.id,
-        conversationId 
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
@@ -188,11 +214,41 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     onDone(fullContent);
-  }, [user?.id, conversationId, toast]);
+  }, [user?.id, conversationId, toast, displayName]);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast({ variant: 'destructive', description: 'Please upload an image file.' });
+      return;
+    }
+
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ variant: 'destructive', description: 'Image must be under 10MB.' });
+      return;
+    }
+
+    const preview = URL.createObjectURL(file);
+    setUploadedImage({ file, preview });
+    
+    // Focus textarea so user can add a prompt
+    textareaRef.current?.focus();
+  };
+
+  const removeUploadedImage = () => {
+    if (uploadedImage) {
+      URL.revokeObjectURL(uploadedImage.preview);
+      setUploadedImage(null);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || !user) return;
+    if ((!input.trim() && !uploadedImage) || isLoading || !user) return;
 
     // Stop voice input if active
     if (isListening) {
@@ -200,18 +256,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     const userMessage = input.trim();
+    const hasImage = !!uploadedImage;
+    let imageBase64: string | undefined;
+
+    if (uploadedImage) {
+      imageBase64 = await fileToBase64(uploadedImage.file);
+    }
+
     setInput('');
+    removeUploadedImage();
     setIsLoading(true);
 
     let currentConversationId = conversationId;
 
     // Create new conversation if needed
     if (!currentConversationId) {
+      const title = userMessage || (hasImage ? 'Image conversation' : 'New chat');
       const { data: newConv } = await supabase
         .from('conversations')
         .insert({
           user_id: user.id,
-          title: userMessage.slice(0, 50) + (userMessage.length > 50 ? '...' : ''),
+          title: title.slice(0, 50) + (title.length > 50 ? '...' : ''),
         })
         .select()
         .single();
@@ -222,11 +287,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
     }
 
+    // Create display message
+    const displayContent = hasImage 
+      ? `${userMessage || 'Sent an image'}${hasImage ? '\n\n[Image attached]' : ''}`
+      : userMessage;
+
     // Add user message
     const tempUserMessage: Message = {
       id: 'temp-' + Date.now(),
       role: 'user',
-      content: userMessage,
+      content: displayContent,
       created_at: new Date().toISOString(),
     };
     setMessages(prev => [...prev, tempUserMessage]);
@@ -239,7 +309,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           conversation_id: currentConversationId,
           user_id: user.id,
           role: 'user',
-          content: userMessage,
+          content: displayContent,
         })
         .select()
         .single();
@@ -255,8 +325,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setIsStreaming(true);
     let assistantContent = '';
 
-    const chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
-    chatHistory.push({ role: 'user', content: userMessage });
+    // Limit context to last N messages to prevent confusion
+    const recentMessages = messages.slice(-MAX_CONTEXT_MESSAGES);
+    const chatHistory = recentMessages.map(m => ({ role: m.role, content: m.content }));
+    chatHistory.push({ role: 'user', content: userMessage || 'Please analyze this image.' });
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
@@ -286,7 +358,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
           // Auto-speak if enabled
           if (autoSpeak && voiceOutputSupported && fullText) {
-            // Strip markdown for speech
             const plainText = fullText
               .replace(/```[\s\S]*?```/g, 'code block')
               .replace(/[*_`#]/g, '')
@@ -319,7 +390,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               .update({ updated_at: new Date().toISOString() })
               .eq('id', currentConversationId);
           }
-        }
+        },
+        imageBase64,
+        userMessage
       );
     } catch (error) {
       console.error('Streaming error:', error);
@@ -335,7 +408,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Enter key should NOT send - only Ctrl+Enter or Cmd+Enter sends
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit(e);
@@ -389,14 +461,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
+    <div className="flex flex-col h-full relative">
+      {/* Messages area - scrollable */}
+      <div className="flex-1 overflow-y-auto p-4 pb-48 scrollbar-thin">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center px-4">
+          <div className="flex flex-col items-center justify-center min-h-full text-center px-4">
             <PhoenixLoader size="lg" animate={false} />
             <h2 className="text-2xl font-bold mb-2 font-['Poppins'] mt-6">
-              Welcome to <span className="text-primary">Phoenix AI</span>
+              Welcome{displayName !== 'User' ? `, ${displayName}` : ''} to <span className="text-primary">Phoenix AI</span>
             </h2>
             <p className="text-muted-foreground max-w-md mb-2">
               Your intelligent assistant with live web search. Just ask naturally – 
@@ -426,22 +498,66 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
       </div>
 
-      {/* Input area */}
-      <div className="border-t border-border p-4">
+      {/* Input area - FIXED at bottom */}
+      <div className="absolute bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur-sm p-4">
         <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
+          {/* Image preview */}
+          {uploadedImage && (
+            <div className="relative inline-block mb-3">
+              <img 
+                src={uploadedImage.preview} 
+                alt="Upload preview" 
+                className="h-20 w-20 object-cover rounded-lg border border-border"
+              />
+              <button
+                type="button"
+                onClick={removeUploadedImage}
+                className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-1 hover:bg-destructive/80 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
+
           <div className="relative glass-card rounded-2xl">
             <Textarea
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={user ? "Ask Phoenix anything... (Ctrl+Enter to send)" : "Sign in to start chatting..."}
+              placeholder={user ? (uploadedImage ? "Describe what to do with this image..." : "Ask Phoenix anything... (Ctrl+Enter to send)") : "Sign in to start chatting..."}
               disabled={!user || isLoading}
-              className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-28 focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-36 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
             />
             <div className="absolute right-2 bottom-2 flex items-center gap-1">
-              {/* ElevenLabs voice call (agent) */}
+              {/* Image upload */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+                className="hidden"
+              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!user || isLoading}
+                    className="h-10 w-10 rounded-xl transition-all"
+                  >
+                    <ImagePlus className="h-5 w-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Upload image</p>
+                </TooltipContent>
+              </Tooltip>
+
+              {/* ElevenLabs voice call */}
               <ElevenLabsCallButton disabled={!user || isLoading} />
 
               {voiceInputSupported && (
@@ -469,10 +585,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <Button
                 type="submit"
                 size="icon"
-                disabled={!input.trim() || isLoading || !user}
+                disabled={(!input.trim() && !uploadedImage) || isLoading || !user}
                 className={cn(
                   'h-10 w-10 rounded-xl transition-all',
-                  input.trim() ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
+                  (input.trim() || uploadedImage) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
                 )}
               >
                 {isLoading ? (
@@ -490,7 +606,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <>
                 <Sparkles className="h-3 w-3 text-primary" />
                 <p className="text-xs text-muted-foreground">
-                  Phoenix AI with live web search • {voiceInputSupported ? 'Voice enabled' : 'Voice not supported'}
+                  Phoenix AI with live web search • {voiceInputSupported ? 'Voice enabled' : 'Voice not supported'} • Image upload ready
                 </p>
               </>
             )}
