@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Loader2, Sparkles, Mic, MicOff, ImagePlus, X } from 'lucide-react';
+import { Send, Loader2, Sparkles, Mic, MicOff, ImagePlus, X, ChevronUp, ChevronDown, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
@@ -46,7 +46,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [uploadedImage, setUploadedImage] = useState<{ file: File; preview: string } | null>(null);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [showBootAnimation, setShowBootAnimation] = useState(false);
+  const [showExtraControls, setShowExtraControls] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
@@ -122,7 +124,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onDelta: (deltaText: string) => void,
     onDone: (fullText: string) => void,
     imageUrl?: string,
-    imagePrompt?: string
+    imagePrompt?: string,
+    signal?: AbortSignal
   ) => {
     const body: any = { 
       messages: chatMessages,
@@ -143,6 +146,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!resp.ok) {
@@ -371,6 +375,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
     };
 
+    // Create abort controller for cancellation
+    abortControllerRef.current = new AbortController();
+
     try {
       await streamChat(
         chatHistory,
@@ -380,6 +387,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           setIsLoading(false);
           setIsGeneratingImage(false);
           setShowBootAnimation(false);
+          abortControllerRef.current = null;
           // Auto-speak if enabled
           if (autoSpeak && voiceOutputSupported && fullText) {
             const plainText = fullText
@@ -416,9 +424,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           }
         },
         imageBase64,
-        userMessage
+        userMessage,
+        abortControllerRef.current.signal
       );
-    } catch (error) {
+    } catch (error: any) {
+      // Check if this was a user cancellation
+      if (error.name === 'AbortError') {
+        console.log('Streaming cancelled by user');
+        // Keep the partial response if any
+        setIsStreaming(false);
+        setIsLoading(false);
+        setIsGeneratingImage(false);
+        setShowBootAnimation(false);
+        abortControllerRef.current = null;
+        return;
+      }
+      
       console.error('Streaming error:', error);
       setMessages(prev => [...prev, {
         id: 'error-' + Date.now(),
@@ -430,6 +451,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setIsLoading(false);
       setIsGeneratingImage(false);
       setShowBootAnimation(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
   };
 
@@ -546,7 +574,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </div>
 
       {/* Input area - FIXED at bottom */}
-      <div className="absolute bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur-sm p-4">
+      <div className="fixed bottom-0 left-0 right-0 md:left-[var(--sidebar-width,0px)] border-t border-border bg-background/95 backdrop-blur-sm p-4 z-50">
         <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
           {/* Image preview */}
           {uploadedImage && (
@@ -574,76 +602,122 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               onKeyDown={handleKeyDown}
               placeholder={user ? (uploadedImage ? "Describe what to do with this image..." : "Ask Phoenix anything... (Ctrl+Enter to send)") : "Sign in to start chatting..."}
               disabled={!user || isLoading}
-              className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-36 focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-24 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
             />
+            
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleImageUpload}
+              className="hidden"
+            />
+
             <div className="absolute right-2 bottom-2 flex items-center gap-1">
-              {/* Image upload */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
+              {/* Toggle extra controls button */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={!user || isLoading}
+                    onClick={() => setShowExtraControls(!showExtraControls)}
+                    disabled={!user}
                     className="h-10 w-10 rounded-xl transition-all"
                   >
-                    <ImagePlus className="h-5 w-5" />
+                    {showExtraControls ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>Upload image</p>
+                  <p>{showExtraControls ? 'Hide tools' : 'Show tools'}</p>
                 </TooltipContent>
               </Tooltip>
 
-              {/* ElevenLabs voice call */}
-              <ElevenLabsCallButton disabled={!user || isLoading} />
+              {/* Collapsible controls */}
+              {showExtraControls && (
+                <>
+                  {/* Image upload */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={!user || isLoading}
+                        className="h-10 w-10 rounded-xl transition-all animate-fade-in"
+                      >
+                        <ImagePlus className="h-5 w-5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Upload image</p>
+                    </TooltipContent>
+                  </Tooltip>
 
-              {voiceInputSupported && (
+                  {/* ElevenLabs voice call */}
+                  <div className="animate-fade-in">
+                    <ElevenLabsCallButton disabled={!user || isLoading} />
+                  </div>
+
+                  {voiceInputSupported && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={toggleVoiceInput}
+                          disabled={!user}
+                          className={cn(
+                            'h-10 w-10 rounded-xl transition-all animate-fade-in',
+                            isListening && 'bg-destructive/20 text-destructive animate-pulse'
+                          )}
+                        >
+                          {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{isListening ? 'Stop listening' : 'Voice input'}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
+              )}
+
+              {/* Cancel/Stop button when streaming */}
+              {isLoading || isStreaming ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       type="button"
-                      variant="ghost"
                       size="icon"
-                      onClick={toggleVoiceInput}
-                      disabled={!user}
-                      className={cn(
-                        'h-10 w-10 rounded-xl transition-all',
-                        isListening && 'bg-destructive/20 text-destructive animate-pulse'
-                      )}
+                      variant="destructive"
+                      onClick={handleCancel}
+                      className="h-10 w-10 rounded-xl transition-all"
                     >
-                      {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                      <Square className="h-4 w-4 fill-current" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <p>{isListening ? 'Stop listening' : 'Voice input'}</p>
+                    <p>Stop generating</p>
                   </TooltipContent>
                 </Tooltip>
-              )}
-              <Button
-                type="submit"
-                size="icon"
-                disabled={(!input.trim() && !uploadedImage) || isLoading || !user}
-                className={cn(
-                  'h-10 w-10 rounded-xl transition-all',
-                  (input.trim() || uploadedImage) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
-                )}
-              >
-                {isLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={(!input.trim() && !uploadedImage) || !user}
+                  className={cn(
+                    'h-10 w-10 rounded-xl transition-all',
+                    (input.trim() || uploadedImage) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
+                  )}
+                >
                   <Send className="h-5 w-5" />
-                )}
-              </Button>
+                </Button>
+              )}
             </div>
           </div>
           <div className="flex items-center justify-center gap-2 mt-2">
