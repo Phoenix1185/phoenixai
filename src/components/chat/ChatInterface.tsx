@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Loader2, Sparkles, Mic, MicOff, ImagePlus, X, ChevronUp, ChevronDown, Square } from 'lucide-react';
+import { Send, Sparkles, X, ChevronUp, ChevronDown, Square } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
@@ -11,12 +12,12 @@ import QuickActions from './QuickActions';
 import PhoenixLoader from './PhoenixLoader';
 import PhoenixBootAnimation from './PhoenixBootAnimation';
 import ImageGenerationLoader from './ImageGenerationLoader';
+import ControlsPanel from './ControlsPanel';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
 import { useVoiceOutput } from '@/hooks/useVoiceOutput';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import ElevenLabsCallButton from './ElevenLabsCallButton';
 
 interface Message {
   id: string;
@@ -468,7 +469,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  const handleRating = async (messageId: string, rating: number) => {
+  const handleRating = async (messageId: string, rating: number, feedbackText?: string) => {
     if (!user || messageId.startsWith('temp-') || messageId.startsWith('error-') || messageId.startsWith('stream-')) return;
 
     await supabase
@@ -486,6 +487,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         user_id: user.id,
         message_id: messageId,
         feedback_type: rating === 1 ? 'positive' : 'negative',
+        feedback_text: feedbackText || null,
       });
   };
 
@@ -548,7 +550,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <ChatMessage
                 key={message.id}
                 message={message}
-                onRate={(rating) => handleRating(message.id, rating)}
+                onRate={(rating, feedbackText) => { handleRating(message.id, rating, feedbackText); }}
                 onSpeak={voiceOutputSupported ? handleSpeakMessage : undefined}
                 isSpeaking={isSpeaking}
                 isStreaming={isStreaming && message.id.startsWith('stream-')}
@@ -595,6 +597,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           )}
 
           <div className="relative glass-card rounded-2xl">
+            {/* Controls panel - positioned ABOVE the input */}
+            <AnimatePresence>
+              {showExtraControls && (
+                <ControlsPanel
+                  onImageUpload={() => fileInputRef.current?.click()}
+                  onToggleVoice={toggleVoiceInput}
+                  isListening={isListening}
+                  voiceInputSupported={voiceInputSupported}
+                  disabled={!user}
+                  isLoading={isLoading}
+                />
+              )}
+            </AnimatePresence>
+            
             <Textarea
               ref={textareaRef}
               value={input}
@@ -634,58 +650,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <p>{showExtraControls ? 'Hide tools' : 'Show tools'}</p>
                 </TooltipContent>
               </Tooltip>
-
-              {/* Collapsible controls */}
-              {showExtraControls && (
-                <>
-                  {/* Image upload */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={!user || isLoading}
-                        className="h-10 w-10 rounded-xl transition-all animate-fade-in"
-                      >
-                        <ImagePlus className="h-5 w-5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Upload image</p>
-                    </TooltipContent>
-                  </Tooltip>
-
-                  {/* ElevenLabs voice call */}
-                  <div className="animate-fade-in">
-                    <ElevenLabsCallButton disabled={!user || isLoading} />
-                  </div>
-
-                  {voiceInputSupported && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={toggleVoiceInput}
-                          disabled={!user}
-                          className={cn(
-                            'h-10 w-10 rounded-xl transition-all animate-fade-in',
-                            isListening && 'bg-destructive/20 text-destructive animate-pulse'
-                          )}
-                        >
-                          {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>{isListening ? 'Stop listening' : 'Voice input'}</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </>
-              )}
 
               {/* Cancel/Stop button when streaming */}
               {isLoading || isStreaming ? (

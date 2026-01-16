@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.elevenlabs-conversation-token]
 verify_jwt = false
+
+[functions.cleanup-expired-cache]
+verify_jwt = false

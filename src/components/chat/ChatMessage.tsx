@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import ImageViewer from './ImageViewer';
+import FeedbackModal from './FeedbackModal';
 
 interface Message {
   id: string;
@@ -17,7 +18,7 @@ interface Message {
 
 interface ChatMessageProps {
   message: Message;
-  onRate: (rating: number) => void;
+  onRate: (rating: number, feedbackText?: string) => void;
   onSpeak?: (content: string) => void;
   isSpeaking?: boolean;
   isStreaming?: boolean;
@@ -32,6 +33,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [viewerImage, setViewerImage] = useState<{ src: string; alt: string } | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const { toast } = useToast();
   const isUser = message.role === 'user';
 
@@ -43,6 +45,18 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       duration: 2000,
     });
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleThumbsDown = () => {
+    setShowFeedbackModal(true);
+  };
+
+  const handleFeedbackSubmit = (feedbackType: string, feedbackText: string) => {
+    onRate(-1, feedbackText);
+    toast({
+      description: 'Thank you for your feedback! Phoenix will learn from this.',
+      duration: 3000,
+    });
   };
 
   const renderInlineFormatting = (text: string) => {
@@ -257,7 +271,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
             <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-accent hover-scale" onClick={copyToClipboard}>{copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}</Button></TooltipTrigger><TooltipContent>Copy</TooltipContent></Tooltip>
             {onSpeak && (<Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', isSpeaking && 'text-primary bg-primary/10')} onClick={() => onSpeak(message.content)}>{isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}</Button></TooltipTrigger><TooltipContent>{isSpeaking ? 'Stop' : 'Read aloud'}</TooltipContent></Tooltip>)}
             <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === 1 && 'text-green-500 bg-green-500/10')} onClick={() => onRate(1)}><ThumbsUp className="h-3.5 w-3.5" /></Button></TooltipTrigger><TooltipContent>Good response</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === -1 && 'text-destructive bg-destructive/10')} onClick={() => onRate(-1)}><ThumbsDown className="h-3.5 w-3.5" /></Button></TooltipTrigger><TooltipContent>Poor response</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={cn('h-7 w-7 hover:bg-accent hover-scale', message.rating === -1 && 'text-destructive bg-destructive/10')} onClick={handleThumbsDown}><ThumbsDown className="h-3.5 w-3.5" /></Button></TooltipTrigger><TooltipContent>Poor response</TooltipContent></Tooltip>
           </motion.div>
         )}
       </motion.div>
@@ -273,6 +287,13 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
           onClose={() => setViewerImage(null)}
         />
       )}
+      
+      {/* Feedback modal for detailed negative feedback */}
+      <FeedbackModal
+        isOpen={showFeedbackModal}
+        onClose={() => setShowFeedbackModal(false)}
+        onSubmit={handleFeedbackSubmit}
+      />
     </motion.div>
   );
 };
