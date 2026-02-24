@@ -14,6 +14,8 @@ import {
   extractSocialMediaQuery,
   selectModel,
   analyzeImage,
+  transcribeAudio,
+  generateVoiceResponse,
   detectImageGenerationRequest,
   generateImage,
   searchKnowledgeBase,
@@ -21,6 +23,11 @@ import {
   detectCorrection,
   extractQueryPattern,
   learnFromWebSearch,
+  detectMemoryCommand,
+  saveUserMemory,
+  getUserMemories,
+  deleteUserMemories,
+  formatMemoriesForPrompt,
   AI_MODELS,
 } from "../_shared/phoenix-core.ts";
 
@@ -65,6 +72,19 @@ interface TelegramUpdate {
       mime_type?: string;
       file_size?: number;
     };
+    reply_to_message?: {
+      message_id: number;
+      from?: {
+        id: number;
+        is_bot: boolean;
+      };
+    };
+    entities?: Array<{
+      type: string;
+      offset: number;
+      length: number;
+      user?: { id: number; username?: string };
+    }>;
   };
   edited_message?: TelegramUpdate['message'];
   callback_query?: {
@@ -244,6 +264,78 @@ async function sendPhoto(
   }
 }
 
+// Send voice note via Telegram
+async function sendVoiceNote(
+  chatId: number,
+  audioBuffer: ArrayBuffer,
+  botToken: string
+): Promise<boolean> {
+  try {
+    const form = new FormData();
+    form.append('chat_id', chatId.toString());
+    const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+    form.append('voice', blob, 'voice.mp3');
+
+    const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendVoice`, {
+      method: 'POST',
+      body: form,
+    });
+
+    if (resp.ok) {
+      console.log('✅ Voice note sent to Telegram');
+      return true;
+    }
+    console.error('Voice note send failed:', await resp.text());
+    return false;
+  } catch (error) {
+    console.error('Voice note error:', error);
+    return false;
+  }
+}
+
+// Check if chat is a group
+function isGroupChat(chatType: string): boolean {
+  return chatType === 'group' || chatType === 'supergroup';
+}
+
+// Check if bot is mentioned in a Telegram group message
+function isBotMentionedTelegram(
+  message: any,
+  botToken: string
+): boolean {
+  const text = message.text || message.caption || '';
+  const lowerText = text.toLowerCase();
+
+  // Check for /phoenix command
+  if (lowerText.startsWith('/phoenix')) return true;
+
+  // Check for @mention via entities
+  if (message.entities) {
+    for (const entity of message.entities) {
+      if (entity.type === 'mention') {
+        const mentionText = text.substring(entity.offset, entity.offset + entity.length).toLowerCase();
+        // We check against common bot names; the actual username check happens via entity.user
+        if (mentionText.includes('phoenix')) return true;
+      }
+      if (entity.type === 'text_mention' && entity.user?.is_bot) {
+        return true; // Direct mention of a bot user
+      }
+    }
+  }
+
+  // Check for name mentions in text
+  if (lowerText.includes('@phoenix') || lowerText.includes('phoenix ai') || lowerText.includes('hey phoenix')) {
+    return true;
+  }
+
+  // Check if replying to the bot's message
+  if (message.reply_to_message?.from?.is_bot) {
+    return true;
+  }
+
+  return false;
+}
+
 // Get file URL from Telegram
 async function getFileUrl(fileId: string, botToken: string): Promise<string | null> {
   try {
@@ -328,6 +420,27 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // GROUP CHAT: Only respond if mentioned or replied to
+    if (isGroupChat(message.chat.type)) {
+      console.log('👥 Telegram group message detected, chat type:', message.chat.type);
+      if (!isBotMentionedTelegram(message, botToken)) {
+        console.log('👥 Not mentioned in group - ignoring');
+        return new Response(JSON.stringify({ ok: true, reason: 'not_mentioned_in_group' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      console.log('👥 ✅ Mentioned in Telegram group, responding!');
+    }
+
+    // Clean bot mentions from text for group messages
+    let processedText = messageText;
+    if (isGroupChat(message.chat.type)) {
+      processedText = processedText
+        .replace(/^\/phoenix\s*/i, '')
+        .replace(/@\w+bot\b/gi, '')
+        .replace(/@phoenix\w*/gi, '')
+        .trim();
+    }
+
     // Send typing indicator
     await sendTypingAction(chatId, botToken);
 
@@ -357,15 +470,137 @@ Deno.serve(async (req) => {
         .eq('id', conversation.id);
     }
 
+    // VOICE MESSAGE HANDLING
+    if (message.voice) {
+      console.log('🎤 Processing Telegram voice message, duration:', message.voice.duration);
+      const voiceUrl = await getFileUrl(message.voice.file_id, botToken);
+      
+      if (voiceUrl && elevenLabsKey) {
+        const transcription = await transcribeAudio(voiceUrl, elevenLabsKey);
+        
+        if (transcription) {
+          console.log('✅ Voice transcribed:', transcription.slice(0, 100));
+          
+          // Get conversation history
+          let history: ConversationMessage[] = [];
+          if (conversation) {
+            const { data: msgs } = await supabase
+              .from('telegram_messages')
+              .select('role, content')
+              .eq('conversation_id', conversation.id)
+              .order('created_at', { ascending: true })
+              .limit(MAX_CONTEXT_MESSAGES);
+            if (msgs) history = msgs.map((m: any) => ({ role: m.role, content: m.content }));
+          }
+
+          // Get user memories for context
+          const memories = await getUserMemories(supabase, 'telegram', chatIdStr);
+          const memoriesPrompt = formatMemoriesForPrompt(memories);
+          
+          const systemPrompt = buildSystemPrompt({
+            senderName,
+            isWhatsApp: true,
+            savedLanguage: conversation?.preferred_language,
+          }) + memoriesPrompt;
+
+          const model = selectModel(transcription, false, true);
+          
+          const thinkingMsgId = await sendMessage(chatId, '🎤 _Transcribing your voice..._', botToken);
+
+          const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${lovableApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                ...history,
+                { role: 'user', content: `[Voice message transcription]: ${transcription}` },
+              ],
+              max_tokens: 4096,
+            }),
+          });
+
+          let reply = '❌ Could not process voice message.';
+          if (aiResponse.ok) {
+            const aiData = await aiResponse.json();
+            reply = aiData.choices?.[0]?.message?.content || reply;
+          }
+
+          // Edit thinking message with actual reply
+          await sendMessage(chatId, reply, botToken, thinkingMsgId || undefined);
+
+          // Try voice response
+          let voiceSent = false;
+          if (elevenLabsKey && reply.length < 1000) {
+            const voiceBuffer = await generateVoiceResponse(reply, elevenLabsKey);
+            if (voiceBuffer) {
+              voiceSent = await sendVoiceNote(chatId, voiceBuffer, botToken);
+            }
+          }
+
+          // Save to history
+          if (conversation) {
+            await supabase.from('telegram_messages').insert([
+              { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: `[Voice]: ${transcription}` },
+              { conversation_id: conversation.id, chat_id: chatIdStr, role: 'assistant', content: reply },
+            ]);
+          }
+
+          return new Response(JSON.stringify({ ok: true, type: 'voice', voiceReply: voiceSent }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+      }
+      
+      // Voice transcription failed
+      await sendMessage(chatId, '🎤 I received your voice message but couldn\'t transcribe it. Please try again or type your message! 🔥', botToken);
+      return new Response(JSON.stringify({ ok: true, type: 'voice_failed' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // Check for memory commands BEFORE regular commands
+    const memoryCmd = detectMemoryCommand(processedText);
+    if (memoryCmd.type !== 'none') {
+      if (memoryCmd.type === 'save' && memoryCmd.fact) {
+        const saved = await saveUserMemory(supabase, 'telegram', chatIdStr, memoryCmd.fact);
+        const reply = saved
+          ? `🧠 Got it! I'll remember: "${memoryCmd.fact}" 🔥`
+          : `😔 Couldn't save that memory. Please try again.`;
+        await sendMessage(chatId, reply, botToken);
+        return new Response(JSON.stringify({ ok: true, type: 'memory_save' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      if (memoryCmd.type === 'recall') {
+        const memories = await getUserMemories(supabase, 'telegram', chatIdStr);
+        const reply = memories.length > 0
+          ? `🧠 *Here's what I remember about you:*\n\n${memories.map(m => `• ${m.fact}`).join('\n')}`
+          : `🧠 I don't have any saved memories for you yet. Tell me things like "Remember that..." and I'll keep them! 🔥`;
+        await sendMessage(chatId, reply, botToken);
+        return new Response(JSON.stringify({ ok: true, type: 'memory_recall' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      if (memoryCmd.type === 'forget') {
+        const count = await deleteUserMemories(supabase, 'telegram', chatIdStr, memoryCmd.forgetQuery);
+        const reply = count > 0
+          ? `🧠 Done! Forgotten ${count} ${count === 1 ? 'memory' : 'memories'}. 🔥`
+          : `🧠 No matching memories found to forget.`;
+        await sendMessage(chatId, reply, botToken);
+        return new Response(JSON.stringify({ ok: true, type: 'memory_forget' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
+
     // Check for special commands
-    const command = parseCommand(messageText);
+    const command = parseCommand(processedText);
     
     if (command.isCommand) {
       if (command.command === 'help') {
         await sendMessage(chatId, getHelpMessage(), botToken);
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return new Response(JSON.stringify({ ok: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
       
       if (command.command === 'clear') {
@@ -376,9 +611,8 @@ Deno.serve(async (req) => {
             .eq('conversation_id', conversation.id);
         }
         await sendMessage(chatId, '🔥 *Phoenix memory cleared!*\n\nStarting fresh. How can I help you?', botToken);
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return new Response(JSON.stringify({ ok: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
       if (command.command === 'language' && command.language) {
@@ -387,9 +621,8 @@ Deno.serve(async (req) => {
           .update({ preferred_language: command.language })
           .eq('id', conversation.id);
         await sendMessage(chatId, `✅ *Language updated!*\n\nI'll now respond in your preferred language.`, botToken);
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return new Response(JSON.stringify({ ok: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
@@ -401,18 +634,18 @@ Deno.serve(async (req) => {
       
       if (photoUrl) {
         // Check if user wants to generate art from this image
-        const wantsArt = messageText && (
-          /edit|art|transform|style|painting|cartoon|anime/i.test(messageText)
+        const wantsArt = processedText && (
+          /edit|art|transform|style|painting|cartoon|anime/i.test(processedText)
         );
         
         if (wantsArt) {
           await sendMessage(chatId, '🎨 _Creating art from your image..._', botToken);
-          const result = await generateImage(messageText + ' based on the uploaded image', 'high', lovableApiKey);
+          const result = await generateImage(processedText + ' based on the uploaded image', 'high', lovableApiKey);
           if (result.success && result.imageBase64) {
             await sendPhoto(
               chatId,
               `data:image/png;base64,${result.imageBase64}`,
-              `🎨 *Generated Art*\n\n_${messageText}_`,
+              `🎨 *Generated Art*\n\n_${processedText}_`,
               botToken
             );
             return new Response(JSON.stringify({ ok: true }), {
@@ -422,14 +655,14 @@ Deno.serve(async (req) => {
         }
         
         // Default: analyze the image
-        imageAnalysis = await analyzeImage(photoUrl, messageText, lovableApiKey) || '';
+        imageAnalysis = await analyzeImage(photoUrl, processedText, lovableApiKey) || '';
         if (imageAnalysis) {
           await sendMessage(chatId, `🖼️ *Image Analysis*\n\n${imageAnalysis}`, botToken);
           
           // Save to conversation history
           if (conversation) {
             await supabase.from('telegram_messages').insert([
-              { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: messageText || '[Image]' },
+              { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: processedText || '[Image]' },
               { conversation_id: conversation.id, chat_id: chatIdStr, role: 'assistant', content: imageAnalysis },
             ]);
           }
@@ -442,28 +675,25 @@ Deno.serve(async (req) => {
     }
 
     // Skip if no text
-    if (!messageText.trim() && !imageAnalysis) {
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (!processedText.trim() && !imageAnalysis) {
+      return new Response(JSON.stringify({ ok: true }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // Check for time queries
-    const timeCheck = isTimeQuery(messageText);
+    const timeCheck = isTimeQuery(processedText);
     if (timeCheck.isTime && timeCheck.location) {
       const timeInfo = getTimeForLocation(timeCheck.location);
       if (timeInfo) {
         await sendMessage(chatId, `🕐 ${timeInfo}`, botToken);
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return new Response(JSON.stringify({ ok: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
     // Check for image generation request
-    const imageRequest = detectImageGenerationRequest(messageText);
+    const imageRequest = detectImageGenerationRequest(processedText);
     if (imageRequest.shouldGenerate) {
-      // Send "generating" message that we'll edit later
       const loadingMsgId = await sendMessage(chatId, '🎨 _Generating your image..._', botToken);
       
       const result = await generateImage(imageRequest.prompt, imageRequest.quality, lovableApiKey);
@@ -475,8 +705,6 @@ Deno.serve(async (req) => {
           `🎨 *Generated Image*\n\n_${imageRequest.prompt}_`,
           botToken
         );
-        
-        // Edit the loading message to show completion
         if (loadingMsgId) {
           await sendMessage(chatId, '✅ Image generated!', botToken, loadingMsgId);
         }
@@ -486,9 +714,8 @@ Deno.serve(async (req) => {
         }
       }
       
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(JSON.stringify({ ok: true }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // Get conversation history
@@ -510,20 +737,20 @@ Deno.serve(async (req) => {
     }
 
     // Add current message
-    conversationHistory.push({ role: 'user', content: messageText });
+    conversationHistory.push({ role: 'user', content: processedText });
 
     // Web search
-    const searchCheck = needsWebSearch(messageText);
+    const searchCheck = needsWebSearch(processedText);
     let webContext = '';
 
     // Check knowledge base first
-    const knowledgeEntry = await searchKnowledgeBase(supabase, messageText);
+    const knowledgeEntry = await searchKnowledgeBase(supabase, processedText);
     if (knowledgeEntry) {
       webContext += `\n\n📚 *VERIFIED KNOWLEDGE:*\n${knowledgeEntry.verified_answer}`;
     }
 
     // URL scraping
-    const urls = extractUrls(messageText);
+    const urls = extractUrls(processedText);
     if (urls.length > 0 && firecrawlApiKey) {
       for (const url of urls.slice(0, 2)) {
         const content = await scrapeUrl(url, firecrawlApiKey);
@@ -534,7 +761,7 @@ Deno.serve(async (req) => {
     }
 
     // Social media search
-    const socialQuery = extractSocialMediaQuery(messageText);
+    const socialQuery = extractSocialMediaQuery(processedText);
     if (socialQuery && tavilyApiKey) {
       const results = await performTavilySearch(socialQuery.query, tavilyApiKey);
       if (results.results.length > 0) {
@@ -559,12 +786,16 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Build system prompt
+    // Get user memories for prompt injection
+    const memories = await getUserMemories(supabase, 'telegram', chatIdStr);
+    const memoriesPrompt = formatMemoriesForPrompt(memories);
+
+    // Build system prompt with memories
     const systemPrompt = buildSystemPrompt({
       senderName,
-      isWhatsApp: true, // Use WhatsApp formatting for Telegram too
+      isWhatsApp: true,
       savedLanguage: conversation?.preferred_language,
-    });
+    }) + memoriesPrompt;
 
     // Add web context to message
     const processedHistory = [...conversationHistory];
@@ -577,11 +808,11 @@ Deno.serve(async (req) => {
     }
 
     // Select best model
-    const model = selectModel(messageText, !!message.photo, !!message.voice);
+    const model = selectModel(processedText, !!message.photo, !!message.voice);
 
     // Send "Phoenix is thinking" message for longer responses
     let thinkingMsgId: number | null = null;
-    if (searchCheck.needed || messageText.length > 100) {
+    if (searchCheck.needed || processedText.length > 100) {
       thinkingMsgId = await sendMessage(chatId, '🔥 _Phoenix is thinking..._', botToken);
     }
 
@@ -611,9 +842,8 @@ Deno.serve(async (req) => {
         ? '💳 AI credits depleted.'
         : '❌ Something went wrong. Please try again.';
       await sendMessage(chatId, errorMsg, botToken, thinkingMsgId || undefined);
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(JSON.stringify({ ok: true }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const aiData = await aiResponse.json();
@@ -629,14 +859,13 @@ Deno.serve(async (req) => {
     // Save to history
     if (conversation) {
       await supabase.from('telegram_messages').insert([
-        { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: messageText },
+        { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: processedText },
         { conversation_id: conversation.id, chat_id: chatIdStr, role: 'assistant', content: reply },
       ]);
     }
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(JSON.stringify({ ok: true }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
     console.error('Telegram webhook error:', error);

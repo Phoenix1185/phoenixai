@@ -290,6 +290,36 @@ export type Database = {
           },
         ]
       }
+      user_memories: {
+        Row: {
+          category: string | null
+          created_at: string
+          fact: string
+          id: string
+          platform: string
+          platform_user_id: string
+          updated_at: string
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          fact: string
+          id?: string
+          platform?: string
+          platform_user_id: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          fact?: string
+          id?: string
+          platform?: string
+          platform_user_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       user_preferences: {
         Row: {
           created_at: string

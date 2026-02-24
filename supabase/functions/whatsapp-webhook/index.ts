@@ -25,6 +25,11 @@ import {
   detectCorrection,
   extractQueryPattern,
   learnFromWebSearch,
+  detectMemoryCommand,
+  saveUserMemory,
+  getUserMemories,
+  deleteUserMemories,
+  formatMemoriesForPrompt,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -566,18 +571,25 @@ async function processWithPhoenixAI(
   conversationHistory: ConversationMessage[],
   preferredLanguage?: string,
   messageContext?: string,
-  supabase?: any
+  supabase?: any,
+  platformUserId?: string
 ): Promise<string> {
   const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
   const tavilyApiKey = Deno.env.get('TAVILY_API_KEY');
   const firecrawlApiKey = Deno.env.get('FIRECRAWL_API_KEY');
 
-  // Build system prompt
+  // Build system prompt with user memories
+  let memoriesContext = '';
+  if (supabase && platformUserId) {
+    const memories = await getUserMemories(supabase, 'whatsapp', platformUserId);
+    memoriesContext = formatMemoriesForPrompt(memories);
+  }
+
   const systemPrompt = buildSystemPrompt({
     senderName,
     isWhatsApp: true,
     savedLanguage: preferredLanguage,
-  });
+  }) + memoriesContext;
 
   let webContext = messageContext || '';
 
@@ -865,7 +877,8 @@ Deno.serve(async (req) => {
             history,
             conversation.preferred_language,
             `\n\n🖼️ IMAGE ANALYSIS:\n${imageAnalysis}`,
-            supabase
+            supabase,
+            chatId
           );
         } else {
           finalResponse = `🖼️ *Image Analysis:*\n\n${imageAnalysis}`;
@@ -950,7 +963,8 @@ Deno.serve(async (req) => {
           history,
           conversation.preferred_language,
           undefined,
-          supabase
+          supabase,
+          chatId
         );
 
         await saveMessage(supabase, conversation.id, chatId, 'assistant', aiResponse);
@@ -1038,6 +1052,40 @@ Deno.serve(async (req) => {
         JSON.stringify({ status: 'handled', type: 'non-text' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Check for memory commands BEFORE regular commands
+    const memoryCmd = detectMemoryCommand(messageText);
+    if (memoryCmd.type !== 'none') {
+      if (memoryCmd.type === 'save' && memoryCmd.fact) {
+        const saved = await saveUserMemory(supabase, 'whatsapp', chatId, memoryCmd.fact);
+        const reply = saved
+          ? `🧠 Got it, ${senderName}! I'll remember that: "${memoryCmd.fact}" 🔥`
+          : `😔 Sorry, I couldn't save that memory. Please try again.`;
+        await sendMessage(chatId, reply, idInstance, apiToken);
+        await saveMessage(supabase, conversation.id, chatId, 'user', messageText);
+        await saveMessage(supabase, conversation.id, chatId, 'assistant', reply);
+        return new Response(JSON.stringify({ status: 'success', type: 'memory_save' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      if (memoryCmd.type === 'recall') {
+        const memories = await getUserMemories(supabase, 'whatsapp', chatId);
+        const reply = memories.length > 0
+          ? `🧠 *Here's what I remember about you, ${senderName}:*\n\n${memories.map(m => `• ${m.fact}`).join('\n')}`
+          : `🧠 I don't have any saved memories for you yet, ${senderName}. Tell me things like "Remember that my name is..." or "I work at..." and I'll keep them! 🔥`;
+        await sendMessage(chatId, reply, idInstance, apiToken);
+        return new Response(JSON.stringify({ status: 'success', type: 'memory_recall' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      if (memoryCmd.type === 'forget') {
+        const count = await deleteUserMemories(supabase, 'whatsapp', chatId, memoryCmd.forgetQuery);
+        const reply = count > 0
+          ? `🧠 Done! I've forgotten ${count} ${count === 1 ? 'memory' : 'memories'}. 🔥`
+          : `🧠 I didn't find any matching memories to forget, ${senderName}.`;
+        await sendMessage(chatId, reply, idInstance, apiToken);
+        return new Response(JSON.stringify({ status: 'success', type: 'memory_forget' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
     }
 
     // Check for special commands
@@ -1177,7 +1225,8 @@ Deno.serve(async (req) => {
         history,
         conversation.preferred_language,
         undefined,
-        supabase
+        supabase,
+        chatId
       );
     } catch (error) {
       console.error('AI processing failed:', error);
