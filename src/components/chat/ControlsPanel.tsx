@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { ImagePlus, Mic, MicOff } from 'lucide-react';
+import { ImagePlus, Mic, MicOff, FileUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -8,6 +8,7 @@ import ElevenLabsCallButton from './ElevenLabsCallButton';
 
 interface ControlsPanelProps {
   onImageUpload: () => void;
+  onDocumentUpload: () => void;
   onToggleVoice: () => void;
   isListening: boolean;
   voiceInputSupported: boolean;
@@ -17,6 +18,7 @@ interface ControlsPanelProps {
 
 const ControlsPanel: React.FC<ControlsPanelProps> = ({
   onImageUpload,
+  onDocumentUpload,
   onToggleVoice,
   isListening,
   voiceInputSupported,
@@ -48,6 +50,25 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
           </TooltipTrigger>
           <TooltipContent side="top">
             <p>Upload image</p>
+          </TooltipContent>
+        </Tooltip>
+
+        {/* Document upload */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onDocumentUpload}
+              disabled={disabled || isLoading}
+              className="h-10 w-10 rounded-xl hover:bg-accent transition-all"
+            >
+              <FileUp className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>Upload document (PDF, TXT, CSV...)</p>
           </TooltipContent>
         </Tooltip>
 
