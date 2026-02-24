@@ -445,57 +445,93 @@ function normalizeWid(wid: string): string {
   return wid.replace(/@c\.us$/, '').replace(/@s\.whatsapp\.net$/, '').trim();
 }
 
+// Fetch bot's own WID from GreenAPI settings as a fallback
+async function getBotWid(idInstance: string, apiToken: string): Promise<string> {
+  try {
+    console.log('🔄 Fetching bot WID from GreenAPI getSettings...');
+    const resp = await fetch(
+      `https://api.greenapi.com/waInstance${idInstance}/getSettings/${apiToken}`,
+      { method: 'GET' }
+    );
+    if (!resp.ok) {
+      console.error('❌ getSettings failed:', resp.status, await resp.text());
+      return '';
+    }
+    const settings = await resp.json();
+    const wid = settings.wid || settings.phone || '';
+    // Ensure wid has proper format
+    const normalizedWid = wid.includes('@') ? wid : (wid ? `${wid}@c.us` : '');
+    console.log('✅ Bot WID resolved from settings:', normalizedWid);
+    return normalizedWid;
+  } catch (error) {
+    console.error('❌ getBotWid error:', error);
+    return '';
+  }
+}
+
 // Check if bot is mentioned in group OR if the message is a reply to the bot's message
 function isBotMentioned(webhook: GreenAPIMessage, botWid: string): boolean {
   const normalizedBotWid = normalizeWid(botWid);
-  console.log('🔍 Checking mention for bot:', normalizedBotWid);
+  console.log('🔍 Checking mention for bot WID:', JSON.stringify({ botWid, normalizedBotWid }));
+
+  // Safety: if we still have no bot WID, respond rather than silently ignore
+  if (!normalizedBotWid) {
+    console.warn('⚠️ Bot WID is empty even after fallback — defaulting to RESPOND to avoid silent ignore');
+    return true;
+  }
   
-  // Check direct mentions in the mentionedJidList
+  // Check direct mentions in the mentionedJidList (extendedTextMessageData)
   const mentionedList = webhook.messageData?.extendedTextMessageData?.contextInfo?.mentionedJidList;
   if (mentionedList && mentionedList.length > 0) {
-    console.log('👥 Mentioned list:', mentionedList);
+    console.log('👥 Mentioned list:', JSON.stringify(mentionedList));
     for (const mentioned of mentionedList) {
       if (normalizeWid(mentioned) === normalizedBotWid) {
-        console.log('✅ Bot directly mentioned in list');
+        console.log('✅ Bot directly mentioned in JID list');
         return true;
       }
     }
   }
+
+  // Check if sender data matches bot (some GreenAPI versions use senderData.sender for mentions)
+  const sender = webhook.senderData?.sender;
+  if (sender && normalizeWid(sender) === normalizedBotWid) {
+    // This means the bot sent the message itself — skip
+    console.log('🤖 Message is from bot itself, skipping');
+    return false;
+  }
   
-  // Check if this is a reply to the bot's message (quoted message)
+  // Check if this is a reply to the bot's message (quoted message — contextInfo format)
   const quotedParticipant = webhook.messageData?.extendedTextMessageData?.contextInfo?.quotedMessage?.participant;
   if (quotedParticipant && normalizeWid(quotedParticipant) === normalizedBotWid) {
-    console.log('👥 Message is a reply to bot\'s message');
+    console.log('✅ Message is a reply (swipe-reply) to bot\'s message');
     return true;
   }
   
   // Also check the legacy quotedMessage format
   const legacyQuoted = webhook.messageData?.quotedMessage?.participant;
   if (legacyQuoted && normalizeWid(legacyQuoted) === normalizedBotWid) {
-    console.log('👥 Message is a reply to bot\'s message (legacy format)');
+    console.log('✅ Message is a reply to bot\'s message (legacy format)');
     return true;
   }
   
-  // Check for @mentions in text with phone number
+  // Check for @mentions in text with phone number or name
   const messageText = webhook.messageData?.textMessageData?.textMessage || 
                       webhook.messageData?.extendedTextMessageData?.text || '';
   const lowerText = messageText.toLowerCase();
   
-  // Check for @phoenixai, @phoenix, or bot's number mentioned with @
+  // Check for @phoenixai, @phoenix, or name mentions
   if (lowerText.includes('@phoenix') || lowerText.includes('phoenix ai') || lowerText.includes('hey phoenix')) {
     console.log('✅ Bot mentioned by name in text');
     return true;
   }
   
   // Check if the bot's phone number is mentioned with @ (e.g., @2341234567890)
-  if (normalizedBotWid) {
-    // Check both formats
-    if (messageText.includes(`@${normalizedBotWid}`)) {
-      console.log('✅ Bot mentioned by number in text');
-      return true;
-    }
+  if (messageText.includes(`@${normalizedBotWid}`)) {
+    console.log('✅ Bot mentioned by number in text');
+    return true;
   }
-  
+
+  console.log('❌ Bot not mentioned — ignoring group message');
   return false;
 }
 
@@ -728,7 +764,7 @@ Deno.serve(async (req) => {
 
     const chatId = webhook.senderData?.chatId;
     const senderName = webhook.senderData?.senderName || 'User';
-    const botWid = webhook.instanceData?.wid || '';
+    let botWid = webhook.instanceData?.wid || '';
 
     if (!chatId) {
       return new Response(
@@ -739,6 +775,22 @@ Deno.serve(async (req) => {
 
     // For group chats, only respond if mentioned
     if (isGroupChat(chatId)) {
+      console.log('👥 Group message detected. Raw botWid from payload:', JSON.stringify(botWid));
+      console.log('👥 Group webhook snapshot:', JSON.stringify({
+        sender: webhook.senderData?.sender,
+        senderName: webhook.senderData?.senderName,
+        chatName: webhook.senderData?.chatName,
+        typeMessage: webhook.messageData?.typeMessage,
+        hasMentionedList: !!(webhook.messageData?.extendedTextMessageData?.contextInfo?.mentionedJidList),
+        mentionedList: webhook.messageData?.extendedTextMessageData?.contextInfo?.mentionedJidList,
+      }));
+
+      // Fallback: fetch bot WID from GreenAPI settings if not in payload
+      if (!botWid) {
+        botWid = await getBotWid(idInstance, apiToken);
+        console.log('👥 Bot WID after fallback:', JSON.stringify(botWid));
+      }
+
       if (!isBotMentioned(webhook, botWid)) {
         console.log('👥 Group message, not mentioned - ignoring');
         return new Response(
@@ -746,7 +798,7 @@ Deno.serve(async (req) => {
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      console.log('👥 Mentioned in group, responding');
+      console.log('👥 ✅ Mentioned in group, responding!');
     }
 
     // Send typing immediately
@@ -953,8 +1005,15 @@ Deno.serve(async (req) => {
       messageText = webhook.messageData.extendedTextMessageData.text;
     }
 
-    // Remove bot mention from message for cleaner processing
-    messageText = messageText.replace(/@\d+/g, '').trim();
+    // Remove only the bot's own mention from message (not all @number patterns)
+    if (botWid) {
+      const botNumber = normalizeWid(botWid);
+      if (botNumber) {
+        messageText = messageText.replace(new RegExp(`@${botNumber}\\b`, 'g'), '');
+      }
+    }
+    // Also clean up common bot name mentions
+    messageText = messageText.replace(/@phoenix\s*ai/gi, '').replace(/@phoenix/gi, '').trim();
 
     if (!messageText) {
       // This should rarely happen now since we handle images and voice above
