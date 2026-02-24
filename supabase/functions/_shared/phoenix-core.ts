@@ -1392,3 +1392,177 @@ export function formatPoll(question: string, options: string[]): string {
   poll += `\n_Reply with the number of your choice!_`;
   return poll;
 }
+
+// ===========================================
+// USER MEMORY SYSTEM (Cross-Platform)
+// ===========================================
+
+export interface UserMemory {
+  id: string;
+  platform: string;
+  platform_user_id: string;
+  fact: string;
+  category: string;
+  created_at: string;
+}
+
+// Detect memory-related commands in user messages
+export function detectMemoryCommand(message: string): {
+  type: 'save' | 'recall' | 'forget' | 'none';
+  fact?: string;
+  forgetQuery?: string;
+} {
+  const lowerMsg = message.toLowerCase().trim();
+
+  // Save / remember commands
+  const savePatterns = [
+    /^remember (?:that )?(.*)/i,
+    /^(?:please )?(?:save|store|note|keep) (?:that )?(.*)/i,
+    /^my (?:name|job|age|birthday|location|hobby|email|phone|number|address|company|school|university|favorite|fav) (?:is|are) (.*)/i,
+    /^i (?:am|work|live|study|like|love|hate|prefer|enjoy) (.*)/i,
+    /^i'm (.*)/i,
+    /^call me (.*)/i,
+  ];
+
+  for (const pattern of savePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      const fact = match[1]?.trim();
+      if (fact && fact.length > 2) {
+        // For "my X is Y" patterns, rebuild the full fact
+        if (/^my /i.test(message)) return { type: 'save', fact: message.trim() };
+        if (/^i /i.test(message) || /^i'm /i.test(message)) return { type: 'save', fact: message.trim() };
+        if (/^call me /i.test(message)) return { type: 'save', fact: `User wants to be called ${fact}` };
+        return { type: 'save', fact };
+      }
+    }
+  }
+
+  // Recall commands
+  const recallPatterns = [
+    /^what do you (?:know|remember) about me/i,
+    /^what have you (?:saved|stored|remembered)/i,
+    /^(?:show|list|tell) (?:me )?(?:my )?(?:memories|facts|info|saved)/i,
+    /^do you remember/i,
+    /^what did i tell you/i,
+  ];
+
+  for (const pattern of recallPatterns) {
+    if (pattern.test(lowerMsg)) return { type: 'recall' };
+  }
+
+  // Forget commands
+  const forgetPatterns = [
+    /^forget (?:that )?(.*)/i,
+    /^(?:delete|remove|erase) (?:the )?(?:memory|fact|info)[:\s]*(.*)/i,
+    /^forget (?:everything|all) about me/i,
+    /^(?:delete|clear|erase) (?:all )?(?:my )?(?:memories|facts|data)/i,
+  ];
+
+  for (const pattern of forgetPatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      const query = match[1]?.trim();
+      if (/everything|all/i.test(lowerMsg)) return { type: 'forget', forgetQuery: '__all__' };
+      return { type: 'forget', forgetQuery: query || '__all__' };
+    }
+  }
+
+  return { type: 'none' };
+}
+
+// Save a user memory
+export async function saveUserMemory(
+  supabase: any,
+  platform: string,
+  platformUserId: string,
+  fact: string,
+  category: string = 'general'
+): Promise<boolean> {
+  try {
+    console.log('🧠 Saving memory:', { platform, platformUserId, fact: fact.slice(0, 50) });
+    const { error } = await supabase.from('user_memories').insert({
+      platform,
+      platform_user_id: platformUserId,
+      fact,
+      category,
+    });
+    if (error) {
+      console.error('Memory save error:', error);
+      return false;
+    }
+    console.log('✅ Memory saved');
+    return true;
+  } catch (error) {
+    console.error('Memory save error:', error);
+    return false;
+  }
+}
+
+// Get all memories for a user
+export async function getUserMemories(
+  supabase: any,
+  platform: string,
+  platformUserId: string
+): Promise<UserMemory[]> {
+  try {
+    const { data, error } = await supabase
+      .from('user_memories')
+      .select('*')
+      .eq('platform', platform)
+      .eq('platform_user_id', platformUserId)
+      .order('created_at', { ascending: true })
+      .limit(50);
+
+    if (error) {
+      console.error('Memory fetch error:', error);
+      return [];
+    }
+    return data || [];
+  } catch (error) {
+    console.error('Memory fetch error:', error);
+    return [];
+  }
+}
+
+// Delete user memories
+export async function deleteUserMemories(
+  supabase: any,
+  platform: string,
+  platformUserId: string,
+  query?: string
+): Promise<number> {
+  try {
+    if (!query || query === '__all__') {
+      const { data, error } = await supabase
+        .from('user_memories')
+        .delete()
+        .eq('platform', platform)
+        .eq('platform_user_id', platformUserId)
+        .select('id');
+      if (error) { console.error('Memory delete error:', error); return 0; }
+      return data?.length || 0;
+    }
+
+    // Delete specific memory matching query
+    const { data, error } = await supabase
+      .from('user_memories')
+      .delete()
+      .eq('platform', platform)
+      .eq('platform_user_id', platformUserId)
+      .ilike('fact', `%${query}%`)
+      .select('id');
+    if (error) { console.error('Memory delete error:', error); return 0; }
+    return data?.length || 0;
+  } catch (error) {
+    console.error('Memory delete error:', error);
+    return 0;
+  }
+}
+
+// Format memories for injection into system prompt
+export function formatMemoriesForPrompt(memories: UserMemory[]): string {
+  if (!memories || memories.length === 0) return '';
+  const facts = memories.map(m => `• ${m.fact}`).join('\n');
+  return `\n\nUSER PERSONAL MEMORIES (things the user told you to remember):\n${facts}\n\nUse these facts naturally in conversation. Don't list them unless asked.`;
+}
