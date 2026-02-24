@@ -35,7 +35,35 @@ interface ChatInterfaceProps {
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/phoenix-chat`;
 const DOC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/document-analyze`;
-const MAX_CONTEXT_MESSAGES = 15; // Limit context to prevent confusion
+const MAX_CONTEXT_MESSAGES = 15;
+
+// Retry-capable fetch with exponential backoff
+const fetchWithRetry = async (
+  url: string,
+  options: RequestInit,
+  retries = 2,
+  backoff = 1000
+): Promise<Response> => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+      const mergedSignal = options.signal;
+
+      const resp = await fetch(url, {
+        ...options,
+        signal: mergedSignal || controller.signal,
+      });
+      clearTimeout(timeout);
+      return resp;
+    } catch (err: any) {
+      if (err.name === 'AbortError' && options.signal?.aborted) throw err; // user cancelled
+      if (attempt === retries) throw err;
+      await new Promise(r => setTimeout(r, backoff * (attempt + 1)));
+    }
+  }
+  throw new Error('Failed to fetch after retries');
+};
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   conversationId, 
@@ -146,7 +174,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       body.imagePrompt = imagePrompt;
     }
 
-    const resp = await fetch(CHAT_URL, {
+    const resp = await fetchWithRetry(CHAT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -455,7 +483,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     try {
       if (hasDocuments && documentsData.length > 0) {
         // Use document-analyze endpoint (supports single + multi-doc)
-        const resp = await fetch(DOC_URL, {
+        const resp = await fetchWithRetry(DOC_URL, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -601,10 +629,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
       
       console.error('Streaming error:', error);
+      const isNetworkError = error.message === 'Failed to fetch' || error.message?.includes('NetworkError') || error.message?.includes('fetch');
+      const friendlyMessage = isNetworkError
+        ? "Network connection issue — please check your internet and try again."
+        : error.message || 'Something went wrong. Please try again.';
+      
       setMessages(prev => [...prev, {
         id: 'error-' + Date.now(),
         role: 'assistant',
-        content: `I encountered an error: ${error.message || 'Please try again.'}`,
+        content: `⚠️ ${friendlyMessage}`,
         created_at: new Date().toISOString(),
       }]);
       setIsStreaming(false);
