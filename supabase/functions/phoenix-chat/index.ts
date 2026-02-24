@@ -17,6 +17,8 @@ import {
   detectCorrection,
   extractQueryPattern,
   learnFromWebSearch,
+  selectModel,
+  AI_MODELS,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -184,7 +186,8 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { messages: rawMessages, conversationId, userId, userName, imageUrl, imagePrompt } = await req.json();
+    const { messages: rawMessages, conversationId, userId, userName, imageUrl, imagePrompt, modelSpeed } = await req.json();
+    const userModelSpeed: string = modelSpeed || 'auto';
 
     if (!rawMessages || rawMessages.length === 0) {
       return new Response(
@@ -449,6 +452,20 @@ Deno.serve(async (req) => {
       console.log('✅ Added web context to message');
     }
 
+    // Determine model based on user selection
+    let chosenModel: string;
+    if (userModelSpeed === 'fast') {
+      chosenModel = AI_MODELS.flashLite;
+    } else if (userModelSpeed === 'balanced') {
+      chosenModel = AI_MODELS.flash;
+    } else if (userModelSpeed === 'powerful') {
+      chosenModel = AI_MODELS.pro;
+    } else {
+      // Auto-routing: select based on message complexity
+      chosenModel = selectModel(lastUserMessage, !!imageUrl, false);
+    }
+    console.log(`🤖 Using model: ${chosenModel} (mode: ${userModelSpeed})`);
+
     // Call Lovable AI Gateway with streaming
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -457,7 +474,7 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: chosenModel,
         messages: [
           { role: 'system', content: systemPrompt },
           ...processedMessages,
