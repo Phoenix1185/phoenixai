@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Sparkles, X, ChevronUp, ChevronDown, Square } from 'lucide-react';
+import { Send, Sparkles, X, ChevronUp, ChevronDown, Square, FileText } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -34,6 +34,7 @@ interface ChatInterfaceProps {
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/phoenix-chat`;
+const DOC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/document-analyze`;
 const MAX_CONTEXT_MESSAGES = 15; // Limit context to prevent confusion
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
@@ -46,6 +47,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isStreaming, setIsStreaming] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<{ file: File; preview: string } | null>(null);
+  const [uploadedDocument, setUploadedDocument] = useState<{ file: File; name: string } | null>(null);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [showBootAnimation, setShowBootAnimation] = useState(false);
   const [showExtraControls, setShowExtraControls] = useState(false);
@@ -54,6 +56,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -258,9 +261,49 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const allowedTypes = [
+      'application/pdf',
+      'text/plain', 'text/csv', 'text/markdown', 'text/html',
+      'application/json', 'application/xml',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+    ];
+    const allowedExts = /\.(pdf|txt|md|csv|json|xml|html|doc|docx|py|js|ts|java|cpp|c|go|rs|rb|sql|yaml|yml|toml|log|sh)$/i;
+
+    if (!allowedTypes.includes(file.type) && !allowedExts.test(file.name)) {
+      toast({ variant: 'destructive', description: 'Unsupported file type. Try PDF, TXT, CSV, JSON, or code files.' });
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      toast({ variant: 'destructive', description: 'File must be under 20MB.' });
+      return;
+    }
+
+    setUploadedDocument({ file, name: file.name });
+    textareaRef.current?.focus();
+  };
+
+  const removeUploadedDocument = () => {
+    setUploadedDocument(null);
+  };
+
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsText(file);
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim() && !uploadedImage) || isLoading || !user) return;
+    if ((!input.trim() && !uploadedImage && !uploadedDocument) || isLoading || !user) return;
 
     // Stop voice input if active
     if (isListening) {
@@ -269,21 +312,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const userMessage = input.trim();
     const hasImage = !!uploadedImage;
+    const hasDocument = !!uploadedDocument;
     let imageBase64: string | undefined;
+    let documentData: { content: string; name: string; type: string } | undefined;
 
     if (uploadedImage) {
       imageBase64 = await fileToBase64(uploadedImage.file);
     }
 
+    if (uploadedDocument) {
+      const isTextBased = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|cpp|c|go|rs|rb|sql|yaml|yml|toml|log|sh)$/i.test(uploadedDocument.name);
+      if (isTextBased) {
+        const textContent = await readFileAsText(uploadedDocument.file);
+        documentData = { content: textContent, name: uploadedDocument.name, type: 'text' };
+      } else {
+        // Binary file (PDF, DOCX) — send as base64
+        const base64 = await fileToBase64(uploadedDocument.file);
+        documentData = { content: base64, name: uploadedDocument.name, type: uploadedDocument.file.type };
+      }
+    }
+
     setInput('');
     removeUploadedImage();
+    removeUploadedDocument();
     setIsLoading(true);
 
     let currentConversationId = conversationId;
 
     // Create new conversation if needed
     if (!currentConversationId) {
-      const title = userMessage || (hasImage ? 'Image conversation' : 'New chat');
+      const title = userMessage || (hasDocument ? `📄 ${uploadedDocument?.name}` : hasImage ? 'Image conversation' : 'New chat');
       const { data: newConv } = await supabase
         .from('conversations')
         .insert({
@@ -299,12 +357,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
     }
 
-    // Create display message with image if present
+    // Create display message
     let displayContent = userMessage;
     if (hasImage && imageBase64) {
-      // Include the image in the message content so it shows in chat
       const imageMarkdown = `\n\n![Uploaded Image](${imageBase64})`;
       displayContent = `${userMessage || 'Sent an image'}${imageMarkdown}`;
+    }
+    if (hasDocument && documentData) {
+      displayContent = `${userMessage || 'Analyze this document'}\n\n📄 **${documentData.name}**`;
     }
 
     // Add user message
@@ -337,7 +397,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     // Check if this looks like an image generation request
-    const isImageGenRequest = /generate|create|make|draw|design|paint|imagine|visualize|illustrate/i.test(userMessage) &&
+    const isImageGenRequest = !hasDocument && /generate|create|make|draw|design|paint|imagine|visualize|illustrate/i.test(userMessage) &&
       /image|picture|photo|art|artwork|illustration|graphic|logo|banner/i.test(userMessage);
 
     // Show boot animation for first message in conversation
@@ -345,21 +405,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setShowBootAnimation(true);
     }
 
-    // Start streaming - show image generation loader if needed
+    // Start streaming
     setIsStreaming(true);
     if (isImageGenRequest) {
       setIsGeneratingImage(true);
     }
     let assistantContent = '';
 
-    // Limit context to last N messages to prevent confusion
-    const recentMessages = messages.slice(-MAX_CONTEXT_MESSAGES);
-    const chatHistory = recentMessages.map(m => ({ role: m.role, content: m.content }));
-    chatHistory.push({ role: 'user', content: userMessage || 'Please analyze this image.' });
-
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
-      // Once we get content, hide the image generation loader
       if (assistantContent.length > 0) {
         setIsGeneratingImage(false);
       }
@@ -383,59 +437,145 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     abortControllerRef.current = new AbortController();
 
     try {
-      await streamChat(
-        chatHistory,
-        updateAssistant,
-        async (fullText: string) => {
-          setIsStreaming(false);
-          setIsLoading(false);
-          setIsGeneratingImage(false);
-          setShowBootAnimation(false);
-          abortControllerRef.current = null;
-          // Auto-speak if enabled
-          if (autoSpeak && voiceOutputSupported && fullText) {
-            const plainText = fullText
-              .replace(/```[\s\S]*?```/g, 'code block')
-              .replace(/[*_`#]/g, '')
-              .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
-            speak(plainText);
+      if (hasDocument && documentData) {
+        // Use document-analyze endpoint
+        const resp = await fetch(DOC_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          },
+          body: JSON.stringify({
+            fileContent: documentData.content,
+            fileName: documentData.name,
+            fileType: documentData.type,
+            prompt: userMessage || 'Analyze this document and provide a comprehensive summary.',
+            userId: user?.id,
+            conversationId: currentConversationId,
+            userName: displayName,
+          }),
+          signal: abortControllerRef.current.signal,
+        });
+
+        if (!resp.ok) {
+          const errorData = await resp.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Document analysis failed');
+        }
+
+        // Stream the response same way as chat
+        const reader = resp.body!.getReader();
+        const decoder = new TextDecoder();
+        let textBuffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          textBuffer += decoder.decode(value, { stream: true });
+
+          let newlineIndex: number;
+          while ((newlineIndex = textBuffer.indexOf('\n')) !== -1) {
+            let line = textBuffer.slice(0, newlineIndex);
+            textBuffer = textBuffer.slice(newlineIndex + 1);
+            if (line.endsWith('\r')) line = line.slice(0, -1);
+            if (line.startsWith(':') || line.trim() === '') continue;
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === '[DONE]') break;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const content = parsed.choices?.[0]?.delta?.content;
+              if (content) updateAssistant(content);
+            } catch { 
+              textBuffer = line + '\n' + textBuffer;
+              break;
+            }
+          }
+        }
+
+        // Save assistant message
+        setIsStreaming(false);
+        setIsLoading(false);
+        setShowBootAnimation(false);
+        abortControllerRef.current = null;
+
+        if (currentConversationId && assistantContent) {
+          const { data: savedAssistantMsg } = await supabase
+            .from('messages')
+            .insert({
+              conversation_id: currentConversationId,
+              user_id: user.id,
+              role: 'assistant',
+              content: assistantContent,
+            })
+            .select()
+            .single();
+
+          if (savedAssistantMsg) {
+            setMessages(prev =>
+              prev.map(m => m.id.startsWith('stream-') ? savedAssistantMsg as Message : m)
+            );
           }
 
-          // Save assistant message to database
-          if (currentConversationId && fullText) {
-            const { data: savedAssistantMsg } = await supabase
-              .from('messages')
-              .insert({
-                conversation_id: currentConversationId,
-                user_id: user.id,
-                role: 'assistant',
-                content: fullText,
-              })
-              .select()
-              .single();
+          await supabase
+            .from('conversations')
+            .update({ updated_at: new Date().toISOString() })
+            .eq('id', currentConversationId);
+        }
+      } else {
+        // Normal chat flow
+        const recentMessages = messages.slice(-MAX_CONTEXT_MESSAGES);
+        const chatHistory = recentMessages.map(m => ({ role: m.role, content: m.content }));
+        chatHistory.push({ role: 'user', content: userMessage || 'Please analyze this image.' });
 
-            if (savedAssistantMsg) {
-              setMessages(prev =>
-                prev.map(m => m.id.startsWith('stream-') ? savedAssistantMsg as Message : m)
-              );
+        await streamChat(
+          chatHistory,
+          updateAssistant,
+          async (fullText: string) => {
+            setIsStreaming(false);
+            setIsLoading(false);
+            setIsGeneratingImage(false);
+            setShowBootAnimation(false);
+            abortControllerRef.current = null;
+            if (autoSpeak && voiceOutputSupported && fullText) {
+              const plainText = fullText
+                .replace(/```[\s\S]*?```/g, 'code block')
+                .replace(/[*_`#]/g, '')
+                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+              speak(plainText);
             }
 
-            // Update conversation timestamp
-            await supabase
-              .from('conversations')
-              .update({ updated_at: new Date().toISOString() })
-              .eq('id', currentConversationId);
-          }
-        },
-        imageBase64,
-        userMessage,
-        abortControllerRef.current.signal
-      );
+            if (currentConversationId && fullText) {
+              const { data: savedAssistantMsg } = await supabase
+                .from('messages')
+                .insert({
+                  conversation_id: currentConversationId,
+                  user_id: user.id,
+                  role: 'assistant',
+                  content: fullText,
+                })
+                .select()
+                .single();
+
+              if (savedAssistantMsg) {
+                setMessages(prev =>
+                  prev.map(m => m.id.startsWith('stream-') ? savedAssistantMsg as Message : m)
+                );
+              }
+
+              await supabase
+                .from('conversations')
+                .update({ updated_at: new Date().toISOString() })
+                .eq('id', currentConversationId);
+            }
+          },
+          imageBase64,
+          userMessage,
+          abortControllerRef.current.signal
+        );
+      }
     } catch (error: any) {
-      // Check if this was a user cancellation
       if (error.name === 'AbortError') {
         console.log('Streaming cancelled by user');
-        // Keep the partial response if any
         setIsStreaming(false);
         setIsLoading(false);
         setIsGeneratingImage(false);
@@ -448,7 +588,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setMessages(prev => [...prev, {
         id: 'error-' + Date.now(),
         role: 'assistant',
-        content: 'I apologize, but I encountered an error. Please try again.',
+        content: `I encountered an error: ${error.message || 'Please try again.'}`,
         created_at: new Date().toISOString(),
       }]);
       setIsStreaming(false);
@@ -581,7 +721,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       {/* Input area - FIXED at bottom */}
       <div className="fixed bottom-0 left-0 right-0 md:left-[var(--sidebar-width,0px)] border-t border-border bg-background/95 backdrop-blur-sm p-4 z-50">
         <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
-          {/* Image preview */}
+          {/* File previews */}
           {uploadedImage && (
             <div className="relative inline-block mb-3">
               <img 
@@ -598,6 +738,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               </button>
             </div>
           )}
+          {uploadedDocument && (
+            <div className="relative inline-flex items-center gap-2 mb-3 px-3 py-2 rounded-lg border border-border bg-muted/50">
+              <FileText className="h-5 w-5 text-primary shrink-0" />
+              <span className="text-sm truncate max-w-[200px]">{uploadedDocument.name}</span>
+              <button
+                type="button"
+                onClick={removeUploadedDocument}
+                className="bg-destructive text-destructive-foreground rounded-full p-1 hover:bg-destructive/80 transition-colors shrink-0"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
 
           <div className="relative glass-card rounded-2xl">
             {/* Controls panel - positioned ABOVE the input */}
@@ -605,6 +758,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               {showExtraControls && (
                 <ControlsPanel
                   onImageUpload={() => fileInputRef.current?.click()}
+                  onDocumentUpload={() => docInputRef.current?.click()}
                   onToggleVoice={toggleVoiceInput}
                   isListening={isListening}
                   voiceInputSupported={voiceInputSupported}
@@ -619,18 +773,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={user ? (uploadedImage ? "Describe what to do with this image..." : "Ask Phoenix anything... (Ctrl+Enter to send)") : "Sign in to start chatting..."}
+              placeholder={user ? (uploadedDocument ? `Ask about ${uploadedDocument.name}...` : uploadedImage ? "Describe what to do with this image..." : "Ask Phoenix anything... (Ctrl+Enter to send)") : "Sign in to start chatting..."}
               disabled={!user || isLoading}
               className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-24 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
             />
             
-            {/* Hidden file input */}
+            {/* Hidden file inputs */}
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
               onChange={handleImageUpload}
+              className="hidden"
+            />
+            <input
+              ref={docInputRef}
+              type="file"
+              accept=".pdf,.txt,.md,.csv,.json,.xml,.html,.doc,.docx,.py,.js,.ts,.java,.cpp,.c,.go,.rs,.rb,.sql,.yaml,.yml,.toml,.log,.sh"
+              onChange={handleDocumentUpload}
               className="hidden"
             />
 
@@ -676,10 +837,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <Button
                   type="submit"
                   size="icon"
-                  disabled={(!input.trim() && !uploadedImage) || !user}
+                  disabled={(!input.trim() && !uploadedImage && !uploadedDocument) || !user}
                   className={cn(
                     'h-10 w-10 rounded-xl transition-all',
-                    (input.trim() || uploadedImage) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
+                    (input.trim() || uploadedImage || uploadedDocument) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
                   )}
                 >
                   <Send className="h-5 w-5" />
