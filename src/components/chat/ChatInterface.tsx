@@ -13,6 +13,7 @@ import PhoenixLoader from './PhoenixLoader';
 import PhoenixBootAnimation from './PhoenixBootAnimation';
 import ImageGenerationLoader from './ImageGenerationLoader';
 import ControlsPanel from './ControlsPanel';
+import ModelSelector, { type ModelSpeed } from './ModelSelector';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
@@ -48,6 +49,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [showBootAnimation, setShowBootAnimation] = useState(false);
   const [showExtraControls, setShowExtraControls] = useState(false);
+  const [modelSpeed, setModelSpeed] = useState<ModelSpeed>('auto');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -133,6 +135,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       userId: user?.id,
       conversationId,
       userName: displayName,
+      modelSpeed,
     };
 
     if (imageUrl) {
@@ -223,7 +226,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     onDone(fullContent);
-  }, [user?.id, conversationId, toast, displayName]);
+  }, [user?.id, conversationId, toast, displayName, modelSpeed]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -688,12 +691,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             {isStreaming ? (
               <StreamingIndicator text="Phoenix is typing..." />
             ) : (
-              <>
+              <div className="flex items-center gap-2">
+                <ModelSelector value={modelSpeed} onChange={setModelSpeed} disabled={isLoading} />
+                <span className="text-muted-foreground">•</span>
                 <Sparkles className="h-3 w-3 text-primary" />
                 <p className="text-xs text-muted-foreground">
-                  Phoenix AI with live web search • {voiceInputSupported ? 'Voice enabled' : 'Voice not supported'} • Image upload ready
+                  Live web search • {voiceInputSupported ? 'Voice' : ''} • Image
                 </p>
-              </>
+              </div>
             )}
           </div>
         </form>
