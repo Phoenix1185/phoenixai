@@ -5,98 +5,112 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+interface DocumentInput {
+  content: string;
+  name: string;
+  type: string;
+}
+
+async function extractText(doc: DocumentInput, lovableApiKey: string): Promise<string> {
+  const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|c|cpp|go|rs|rb|php|sql|yaml|yml|toml|ini|log|sh|bat)$/i.test(doc.name);
+
+  if (isTextFile) return doc.content;
+
+  console.log(`📄 Processing document: ${doc.name} (${doc.type})`);
+  const readResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${lovableApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-flash',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Extract ALL text content from this document. Preserve the structure, headings, lists, and formatting as much as possible. Return the full extracted text.' },
+          { type: 'image_url', image_url: { url: doc.content } },
+        ],
+      }],
+      max_tokens: 8192,
+    }),
+  });
+
+  if (readResponse.ok) {
+    const readData = await readResponse.json();
+    const text = readData.choices?.[0]?.message?.content || '';
+    console.log(`📄 Extracted ${text.length} chars from ${doc.name}`);
+    return text;
+  }
+  console.error('Document extraction failed:', readResponse.status);
+  return '[Could not extract text from this document format]';
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { fileContent, fileName, fileType, prompt, userId, conversationId, userName } = await req.json();
-
-    if (!fileContent || !fileName) {
-      return new Response(
-        JSON.stringify({ error: 'File content and name are required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
+    const body = await req.json();
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
 
-    // For text-based files, the content is already text
-    // For base64 files (PDF etc.), we extract text on the client side
-    const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|c|cpp|go|rs|rb|php|sql|yaml|yml|toml|ini|log|sh|bat)$/i.test(fileName);
+    // Support both single doc (legacy) and multi-doc
+    let documents: DocumentInput[] = [];
 
-    let extractedText = '';
-    
-    if (isTextFile) {
-      // Text content passed directly
-      extractedText = fileContent;
-    } else {
-      // For PDFs and other binary docs, we use AI vision to "read" the document
-      // The client sends the file as base64 data URI
-      console.log(`📄 Processing document: ${fileName} (${fileType})`);
-      
-      // Use Gemini to read the document content from base64
-      const readResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${lovableApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'google/gemini-2.5-flash',
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { 
-                  type: 'text', 
-                  text: 'Extract ALL text content from this document. Preserve the structure, headings, lists, and formatting as much as possible. Return the full extracted text.' 
-                },
-                { 
-                  type: 'image_url', 
-                  image_url: { url: fileContent } 
-                },
-              ],
-            },
-          ],
-          max_tokens: 8192,
-        }),
-      });
-
-      if (readResponse.ok) {
-        const readData = await readResponse.json();
-        extractedText = readData.choices?.[0]?.message?.content || '';
-        console.log(`📄 Extracted ${extractedText.length} chars from document`);
-      } else {
-        console.error('Document extraction failed:', readResponse.status);
-        extractedText = '[Could not extract text from this document format]';
-      }
+    if (body.documents && Array.isArray(body.documents)) {
+      documents = body.documents;
+    } else if (body.fileContent && body.fileName) {
+      documents = [{ content: body.fileContent, name: body.fileName, type: body.fileType || 'text' }];
     }
 
-    if (!extractedText || extractedText.length < 10) {
+    if (documents.length === 0) {
       return new Response(
-        JSON.stringify({ error: 'Could not extract text from this document. Try a different format.' }),
+        JSON.stringify({ error: 'At least one document is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Truncate if extremely long
-    const maxChars = 30000;
-    const truncated = extractedText.length > maxChars;
-    const docText = truncated ? extractedText.slice(0, maxChars) + '\n\n[... document truncated ...]' : extractedText;
+    // Extract text from all documents in parallel
+    const extractedTexts = await Promise.all(
+      documents.map(doc => extractText(doc, lovableApiKey))
+    );
 
-    // Now analyze with AI
-    const userPrompt = prompt || 'Please analyze this document and provide a comprehensive summary.';
-    
-    const systemPrompt = `You are Phoenix AI, an intelligent document analyst. The user has uploaded a document titled "${fileName}".
+    const maxCharsPerDoc = documents.length > 1 ? Math.floor(30000 / documents.length) : 30000;
+
+    let docSections = '';
+    for (let i = 0; i < documents.length; i++) {
+      let text = extractedTexts[i];
+      if (!text || text.length < 10) text = '[Could not extract text]';
+      if (text.length > maxCharsPerDoc) text = text.slice(0, maxCharsPerDoc) + '\n\n[... truncated ...]';
+      docSections += `\n\n=== DOCUMENT ${i + 1}: "${documents[i].name}" ===\n${text}\n=== END DOCUMENT ${i + 1} ===\n`;
+    }
+
+    const isComparison = documents.length > 1;
+    const userPrompt = body.prompt || (isComparison
+      ? 'Compare these documents and highlight key similarities and differences.'
+      : 'Analyze this document and provide a comprehensive summary.');
+
+    const systemPrompt = isComparison
+      ? `You are Phoenix AI, an intelligent document analyst. The user has uploaded ${documents.length} documents for comparison and analysis.
+
+${docSections}
+
+Compare and analyze these documents based on the user's request. Highlight:
+- Key similarities and differences
+- Unique content in each document
+- Structural and thematic comparisons
+- A synthesized summary
+
+Be thorough, accurate, and well-organized. Reference specific documents by name.`
+      : `You are Phoenix AI, an intelligent document analyst. The user has uploaded a document titled "${documents[0].name}".
 
 DOCUMENT CONTENT:
 ---
-${docText}
+${extractedTexts[0]?.length > 30000 ? extractedTexts[0].slice(0, 30000) + '\n\n[... truncated ...]' : extractedTexts[0]}
 ---
 
-Analyze this document based on the user's request. Be thorough, accurate, and well-organized in your response. If the document is lengthy, provide key points and structured analysis. Always reference specific sections when relevant.`;
+Analyze this document based on the user's request. Be thorough, accurate, and well-organized in your response.`;
 
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',

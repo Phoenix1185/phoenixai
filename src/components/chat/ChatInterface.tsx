@@ -47,7 +47,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isStreaming, setIsStreaming] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<{ file: File; preview: string } | null>(null);
-  const [uploadedDocument, setUploadedDocument] = useState<{ file: File; name: string } | null>(null);
+  const [uploadedDocuments, setUploadedDocuments] = useState<{ file: File; name: string }[]>([]);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [showBootAnimation, setShowBootAnimation] = useState(false);
   const [showExtraControls, setShowExtraControls] = useState(false);
@@ -262,8 +262,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files) return;
 
     const allowedTypes = [
       'application/pdf',
@@ -274,22 +274,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ];
     const allowedExts = /\.(pdf|txt|md|csv|json|xml|html|doc|docx|py|js|ts|java|cpp|c|go|rs|rb|sql|yaml|yml|toml|log|sh)$/i;
 
-    if (!allowedTypes.includes(file.type) && !allowedExts.test(file.name)) {
-      toast({ variant: 'destructive', description: 'Unsupported file type. Try PDF, TXT, CSV, JSON, or code files.' });
-      return;
+    const validFiles: { file: File; name: string }[] = [];
+    for (const file of Array.from(files)) {
+      if (!allowedTypes.includes(file.type) && !allowedExts.test(file.name)) {
+        toast({ variant: 'destructive', description: `Unsupported file: ${file.name}` });
+        continue;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        toast({ variant: 'destructive', description: `${file.name} exceeds 20MB limit.` });
+        continue;
+      }
+      validFiles.push({ file, name: file.name });
     }
 
-    if (file.size > 20 * 1024 * 1024) {
-      toast({ variant: 'destructive', description: 'File must be under 20MB.' });
-      return;
+    if (validFiles.length > 0) {
+      setUploadedDocuments(prev => {
+        const combined = [...prev, ...validFiles];
+        if (combined.length > 5) {
+          toast({ variant: 'destructive', description: 'Maximum 5 documents at once.' });
+          return combined.slice(0, 5);
+        }
+        return combined;
+      });
     }
-
-    setUploadedDocument({ file, name: file.name });
+    // Reset input so same files can be re-selected
+    e.target.value = '';
     textareaRef.current?.focus();
   };
 
-  const removeUploadedDocument = () => {
-    setUploadedDocument(null);
+  const removeUploadedDocument = (index: number) => {
+    setUploadedDocuments(prev => prev.filter((_, i) => i !== index));
   };
 
   const readFileAsText = (file: File): Promise<string> => {
@@ -303,7 +317,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim() && !uploadedImage && !uploadedDocument) || isLoading || !user) return;
+    if ((!input.trim() && !uploadedImage && uploadedDocuments.length === 0) || isLoading || !user) return;
 
     // Stop voice input if active
     if (isListening) {
@@ -312,36 +326,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const userMessage = input.trim();
     const hasImage = !!uploadedImage;
-    const hasDocument = !!uploadedDocument;
+    const hasDocuments = uploadedDocuments.length > 0;
     let imageBase64: string | undefined;
-    let documentData: { content: string; name: string; type: string } | undefined;
+    let documentsData: { content: string; name: string; type: string }[] = [];
 
     if (uploadedImage) {
       imageBase64 = await fileToBase64(uploadedImage.file);
     }
 
-    if (uploadedDocument) {
-      const isTextBased = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|cpp|c|go|rs|rb|sql|yaml|yml|toml|log|sh)$/i.test(uploadedDocument.name);
-      if (isTextBased) {
-        const textContent = await readFileAsText(uploadedDocument.file);
-        documentData = { content: textContent, name: uploadedDocument.name, type: 'text' };
-      } else {
-        // Binary file (PDF, DOCX) — send as base64
-        const base64 = await fileToBase64(uploadedDocument.file);
-        documentData = { content: base64, name: uploadedDocument.name, type: uploadedDocument.file.type };
+    if (hasDocuments) {
+      for (const doc of uploadedDocuments) {
+        const isTextBased = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|cpp|c|go|rs|rb|sql|yaml|yml|toml|log|sh)$/i.test(doc.name);
+        if (isTextBased) {
+          const textContent = await readFileAsText(doc.file);
+          documentsData.push({ content: textContent, name: doc.name, type: 'text' });
+        } else {
+          const base64 = await fileToBase64(doc.file);
+          documentsData.push({ content: base64, name: doc.name, type: doc.file.type });
+        }
       }
     }
 
     setInput('');
     removeUploadedImage();
-    removeUploadedDocument();
+    setUploadedDocuments([]);
     setIsLoading(true);
 
     let currentConversationId = conversationId;
 
     // Create new conversation if needed
     if (!currentConversationId) {
-      const title = userMessage || (hasDocument ? `📄 ${uploadedDocument?.name}` : hasImage ? 'Image conversation' : 'New chat');
+      const title = userMessage || (hasDocuments ? `📄 ${documentsData.map(d => d.name).join(', ')}` : hasImage ? 'Image conversation' : 'New chat');
       const { data: newConv } = await supabase
         .from('conversations')
         .insert({
@@ -363,8 +378,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const imageMarkdown = `\n\n![Uploaded Image](${imageBase64})`;
       displayContent = `${userMessage || 'Sent an image'}${imageMarkdown}`;
     }
-    if (hasDocument && documentData) {
-      displayContent = `${userMessage || 'Analyze this document'}\n\n📄 **${documentData.name}**`;
+    if (hasDocuments && documentsData.length > 0) {
+      const docNames = documentsData.map(d => `📄 **${d.name}**`).join('\n');
+      displayContent = `${userMessage || (documentsData.length > 1 ? 'Compare these documents' : 'Analyze this document')}\n\n${docNames}`;
     }
 
     // Add user message
@@ -397,7 +413,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     // Check if this looks like an image generation request
-    const isImageGenRequest = !hasDocument && /generate|create|make|draw|design|paint|imagine|visualize|illustrate/i.test(userMessage) &&
+    const isImageGenRequest = !hasDocuments && /generate|create|make|draw|design|paint|imagine|visualize|illustrate/i.test(userMessage) &&
       /image|picture|photo|art|artwork|illustration|graphic|logo|banner/i.test(userMessage);
 
     // Show boot animation for first message in conversation
@@ -437,8 +453,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     abortControllerRef.current = new AbortController();
 
     try {
-      if (hasDocument && documentData) {
-        // Use document-analyze endpoint
+      if (hasDocuments && documentsData.length > 0) {
+        // Use document-analyze endpoint (supports single + multi-doc)
         const resp = await fetch(DOC_URL, {
           method: 'POST',
           headers: {
@@ -446,10 +462,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
           },
           body: JSON.stringify({
-            fileContent: documentData.content,
-            fileName: documentData.name,
-            fileType: documentData.type,
-            prompt: userMessage || 'Analyze this document and provide a comprehensive summary.',
+            documents: documentsData,
+            prompt: userMessage || (documentsData.length > 1
+              ? 'Compare these documents and highlight key similarities and differences.'
+              : 'Analyze this document and provide a comprehensive summary.'),
             userId: user?.id,
             conversationId: currentConversationId,
             userName: displayName,
@@ -738,17 +754,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               </button>
             </div>
           )}
-          {uploadedDocument && (
-            <div className="relative inline-flex items-center gap-2 mb-3 px-3 py-2 rounded-lg border border-border bg-muted/50">
-              <FileText className="h-5 w-5 text-primary shrink-0" />
-              <span className="text-sm truncate max-w-[200px]">{uploadedDocument.name}</span>
-              <button
-                type="button"
-                onClick={removeUploadedDocument}
-                className="bg-destructive text-destructive-foreground rounded-full p-1 hover:bg-destructive/80 transition-colors shrink-0"
-              >
-                <X className="h-3 w-3" />
-              </button>
+          {uploadedDocuments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {uploadedDocuments.map((doc, index) => (
+                <div key={index} className="relative inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-muted/50">
+                  <FileText className="h-5 w-5 text-primary shrink-0" />
+                  <span className="text-sm truncate max-w-[200px]">{doc.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeUploadedDocument(index)}
+                    className="bg-destructive text-destructive-foreground rounded-full p-1 hover:bg-destructive/80 transition-colors shrink-0"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
@@ -773,7 +793,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={user ? (uploadedDocument ? `Ask about ${uploadedDocument.name}...` : uploadedImage ? "Describe what to do with this image..." : "Ask Phoenix anything... (Ctrl+Enter to send)") : "Sign in to start chatting..."}
+              placeholder={user ? (uploadedDocuments.length > 0 ? `Ask about ${uploadedDocuments.map(d => d.name).join(', ')}...` : uploadedImage ? "Describe what to do with this image..." : "Ask Phoenix anything... (Ctrl+Enter to send)") : "Sign in to start chatting..."}
               disabled={!user || isLoading}
               className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent pr-24 focus-visible:ring-0 focus-visible:ring-offset-0"
               rows={1}
@@ -790,6 +810,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <input
               ref={docInputRef}
               type="file"
+              multiple
               accept=".pdf,.txt,.md,.csv,.json,.xml,.html,.doc,.docx,.py,.js,.ts,.java,.cpp,.c,.go,.rs,.rb,.sql,.yaml,.yml,.toml,.log,.sh"
               onChange={handleDocumentUpload}
               className="hidden"
@@ -837,10 +858,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <Button
                   type="submit"
                   size="icon"
-                  disabled={(!input.trim() && !uploadedImage && !uploadedDocument) || !user}
+                  disabled={(!input.trim() && !uploadedImage && uploadedDocuments.length === 0) || !user}
                   className={cn(
                     'h-10 w-10 rounded-xl transition-all',
-                    (input.trim() || uploadedImage || uploadedDocument) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
+                    (input.trim() || uploadedImage || uploadedDocuments.length > 0) ? 'gradient-phoenix text-primary-foreground' : 'bg-muted'
                   )}
                 >
                   <Send className="h-5 w-5" />
