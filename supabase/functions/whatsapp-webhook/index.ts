@@ -688,6 +688,8 @@ async function processWithPhoenixAI(
 
   console.log(`🤖 Using model: ${model}`);
 
+  const isOpenAIModel = model.startsWith('openai/');
+  const tokenParam = isOpenAIModel ? { max_completion_tokens: 3000 } : { max_tokens: 3000 };
   const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -698,7 +700,7 @@ async function processWithPhoenixAI(
       model,
       messages: messagesForAI,
       stream: false,
-      max_tokens: 3000,
+      ...tokenParam,
     }),
   });
 
