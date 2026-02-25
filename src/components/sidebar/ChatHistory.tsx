@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { MessageSquare, Trash2, Download } from 'lucide-react';
+import { MessageSquare, Trash2, Download, Share2 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,6 +14,16 @@ import { formatDistanceToNow } from 'date-fns';
 import ConversationSearch from './ConversationSearch';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 import { useToast } from '@/hooks/use-toast';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface Conversation {
   id: string;
@@ -27,6 +37,7 @@ const ChatHistory: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+  const [exportTarget, setExportTarget] = useState<Conversation | null>(null);
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -75,9 +86,15 @@ const ChatHistory: React.FC = () => {
     }
   };
 
-  const exportConversation = async (conv: Conversation, e: React.MouseEvent) => {
+  const handleExportClick = (conv: Conversation, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!user) return;
+    setExportTarget(conv);
+  };
+
+  const handleExportConfirm = async () => {
+    if (!exportTarget || !user) return;
+    const conv = exportTarget;
+    setExportTarget(null);
 
     const { data: messages } = await supabase
       .from('messages')
@@ -94,7 +111,6 @@ const ChatHistory: React.FC = () => {
     for (const msg of messages) {
       const role = msg.role === 'user' ? '**You**' : '**Phoenix AI**';
       const time = new Date(msg.created_at).toLocaleTimeString();
-      // Strip base64 images from export
       const content = msg.content.replace(/!\[[^\]]*\]\(data:image[^)]+\)/g, '[image]');
       md += `${role} _(${time})_\n\n${content}\n\n---\n\n`;
     }
@@ -107,6 +123,32 @@ const ChatHistory: React.FC = () => {
     a.click();
     URL.revokeObjectURL(url);
     toast({ description: 'Chat exported as Markdown.', duration: 2000 });
+  };
+
+  const handleShare = async (conv: Conversation, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user) return;
+
+    // Generate slug if not exists
+    const slug = conv.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) + '-' + conv.id.slice(0, 8);
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ is_shared: true, slug } as any)
+      .eq('id', conv.id);
+
+    if (error) {
+      toast({ variant: 'destructive', description: 'Failed to share chat.' });
+      return;
+    }
+
+    const shareUrl = `${window.location.origin}/s/${slug}`;
+    await navigator.clipboard.writeText(shareUrl);
+    toast({ description: 'Share link copied to clipboard!', duration: 3000 });
   };
 
   const handleSearch = useCallback((query: string) => {
@@ -181,24 +223,17 @@ const ChatHistory: React.FC = () => {
                 >
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   <span className="truncate flex-1 text-left">{conv.title}</span>
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={(e) => exportConversation(conv, e)}
-                    >
-                      <Download className="h-3 w-3 text-muted-foreground" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={(e) => confirmDelete(conv, e)}
-                    >
-                      <Trash2 className="h-3 w-3 text-destructive" />
-                    </Button>
-                  </div>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => handleShare(conv, e)}>
+                       <Share2 className="h-3 w-3 text-muted-foreground" />
+                     </Button>
+                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => handleExportClick(conv, e)}>
+                       <Download className="h-3 w-3 text-muted-foreground" />
+                     </Button>
+                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => confirmDelete(conv, e)}>
+                       <Trash2 className="h-3 w-3 text-destructive" />
+                     </Button>
+                   </div>
                 </button>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -227,6 +262,21 @@ const ChatHistory: React.FC = () => {
         onConfirm={handleDelete}
         title={deleteTarget?.title}
       />
+
+      <AlertDialog open={!!exportTarget} onOpenChange={(open) => !open && setExportTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Export Chat</AlertDialogTitle>
+            <AlertDialogDescription>
+              Download "{exportTarget?.title}" as a Markdown file?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleExportConfirm}>Download</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

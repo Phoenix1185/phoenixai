@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX, Download, ZoomIn } from 'lucide-react';
+import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX, Download, ZoomIn, Pencil } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import ImageViewer from './ImageViewer';
 import FeedbackModal from './FeedbackModal';
+import { Textarea } from '@/components/ui/textarea';
 
 interface Message {
   id: string;
@@ -20,6 +21,7 @@ interface ChatMessageProps {
   message: Message;
   onRate: (rating: number, feedbackText?: string) => void;
   onSpeak?: (content: string) => void;
+  onEdit?: (messageId: string, newContent: string) => void;
   isSpeaking?: boolean;
   isStreaming?: boolean;
 }
@@ -28,12 +30,15 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   message, 
   onRate, 
   onSpeak,
+  onEdit,
   isSpeaking = false,
   isStreaming = false 
 }) => {
   const [copied, setCopied] = useState(false);
   const [viewerImage, setViewerImage] = useState<{ src: string; alt: string } | null>(null);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
   const { toast } = useToast();
   const isUser = message.role === 'user';
 
@@ -261,10 +266,37 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       )}
 
       <motion.div layout className={cn('max-w-[80%] rounded-2xl px-4 py-3 shadow-sm', isUser ? 'gradient-phoenix text-primary-foreground' : 'glass-card hover-lift')}>
-        <div className="text-sm leading-relaxed">
-          {renderContent(message.content)}
-          {isStreaming && <motion.span animate={{ opacity: [1, 0, 1] }} transition={{ duration: 0.8, repeat: Infinity }} className="inline-block w-2 h-5 bg-primary ml-1 rounded-sm" />}
-        </div>
+        {isEditing ? (
+          <div className="space-y-2">
+            <Textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className="min-h-[60px] text-sm bg-background/20 border-primary-foreground/30 text-inherit"
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-7 text-xs">Cancel</Button>
+              <Button size="sm" onClick={() => {
+                if (editContent.trim() && onEdit) {
+                  onEdit(message.id, editContent.trim());
+                  setIsEditing(false);
+                }
+              }} className="h-7 text-xs bg-background/20 hover:bg-background/30">Resend</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm leading-relaxed">
+            {renderContent(message.content)}
+            {isStreaming && <motion.span animate={{ opacity: [1, 0, 1] }} transition={{ duration: 0.8, repeat: Infinity }} className="inline-block w-2 h-5 bg-primary ml-1 rounded-sm" />}
+          </div>
+        )}
+
+        {/* User message actions (edit) */}
+        {isUser && !isStreaming && !isEditing && !message.id.startsWith('temp-') && onEdit && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="flex items-center gap-1 mt-2 pt-1 border-t border-primary-foreground/20">
+            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-primary-foreground/20 text-primary-foreground" onClick={() => { setEditContent(message.content.replace(/\n\n!\[.*\]\(data:image[^)]+\)/g, '')); setIsEditing(true); }}><Pencil className="h-3 w-3" /></Button></TooltipTrigger><TooltipContent>Edit & resend</TooltipContent></Tooltip>
+          </motion.div>
+        )}
 
         {!isUser && !isStreaming && message.content && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30">

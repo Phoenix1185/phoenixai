@@ -455,26 +455,42 @@ export function parseCommand(message: string): CommandResult {
   return { isCommand: false };
 }
 
+// Common words that start with a capital letter but are NOT proper nouns
+const COMMON_CAPITALIZED_WORDS = new Set([
+  'hey', 'hello', 'hi', 'sup', 'yo', 'wassup', 'waddup', 'hola', 'howdy',
+  'good', 'morning', 'afternoon', 'evening', 'night',
+  'thanks', 'thank', 'please', 'sorry', 'okay', 'ok', 'yes', 'no', 'yeah', 'nah',
+  'wow', 'whoa', 'omg', 'lol', 'bruh', 'bro', 'dude', 'fam', 'man',
+  'what', 'who', 'where', 'when', 'why', 'how', 'which', 'can', 'could',
+  'the', 'this', 'that', 'these', 'those', 'is', 'are', 'was', 'were',
+  'do', 'does', 'did', 'have', 'has', 'had', 'will', 'would', 'should',
+  'just', 'like', 'really', 'very', 'well', 'also', 'too', 'but', 'and',
+  'tell', 'show', 'give', 'help', 'check', 'find', 'search', 'look',
+  'create', 'make', 'generate', 'write', 'send', 'get', 'let',
+  'it', 'i', 'you', 'we', 'they', 'he', 'she', 'me', 'my', 'your',
+  'not', 'don', 'doesn', 'didn', 'won', 'can', 'isn', 'aren', 'wasn',
+]);
+
 // Detect if a message contains a proper noun (capitalized word that's not at start)
 function containsProperNoun(message: string): boolean {
-  // Split into words and check for capitalized words (not at sentence start)
   const words = message.split(/\s+/);
   
-  // Single capitalized word is likely a proper noun/entity
+  // Single word — only treat as proper noun if NOT a common word
   if (words.length === 1 && /^[A-Z][a-zA-Z]{2,}$/.test(message)) {
+    if (COMMON_CAPITALIZED_WORDS.has(message.toLowerCase())) return false;
     return true;
   }
   
-  // Check for capitalized words in the middle of sentences
+  // Check for capitalized words in the middle of sentences (skip first word)
   for (let i = 1; i < words.length; i++) {
-    if (/^[A-Z][a-zA-Z]{2,}$/.test(words[i])) {
+    if (/^[A-Z][a-zA-Z]{2,}$/.test(words[i]) && !COMMON_CAPITALIZED_WORDS.has(words[i].toLowerCase())) {
       return true;
     }
   }
   
-  // Check for all-caps words (acronyms like RUGIPO, NASA, etc.)
+  // Check for all-caps words (acronyms like RUGIPO, NASA, etc.) — 3+ letters
   for (const word of words) {
-    if (/^[A-Z]{3,}$/.test(word)) {
+    if (/^[A-Z]{3,}$/.test(word) && !COMMON_CAPITALIZED_WORDS.has(word.toLowerCase())) {
       return true;
     }
   }
@@ -934,7 +950,7 @@ export async function analyzeImage(imageUrl: string, caption: string | undefined
             ],
           },
         ],
-        max_tokens: 1500,
+        ...(AI_MODELS.vision.startsWith('openai/') ? { max_completion_tokens: 1500 } : { max_tokens: 1500 }),
       }),
     });
 
@@ -953,7 +969,7 @@ export async function analyzeImage(imageUrl: string, caption: string | undefined
   }
 }
 
-// Transcribe audio using ElevenLabs Speech-to-Text
+// Transcribe audio using ElevenLabs Speech-to-Text, with Lovable AI Gemini fallback
 export async function transcribeAudio(audioUrl: string, elevenLabsKey: string): Promise<string | null> {
   try {
     console.log('🎤 Transcribing audio with ElevenLabs');
@@ -966,28 +982,87 @@ export async function transcribeAudio(audioUrl: string, elevenLabsKey: string): 
     }
     
     const audioBlob = await audioResponse.blob();
-    const formData = new FormData();
-    formData.append('file', audioBlob, 'audio.ogg');
-    formData.append('model_id', 'scribe_v1');
-    formData.append('language_code', 'eng'); // Auto-detect or specific language
     
-    const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
-      method: 'POST',
-      headers: {
-        'xi-api-key': elevenLabsKey,
-      },
-      body: formData,
-    });
+    // Try ElevenLabs first
+    try {
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'audio.ogg');
+      formData.append('model_id', 'scribe_v1');
+      formData.append('language_code', 'eng');
+      
+      const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+        method: 'POST',
+        headers: {
+          'xi-api-key': elevenLabsKey,
+        },
+        body: formData,
+      });
 
-    if (!response.ok) {
-      console.error('ElevenLabs STT error:', response.status, await response.text());
+      if (response.ok) {
+        const data = await response.json();
+        const transcription = data.text || data.transcription;
+        if (transcription) {
+          console.log('✅ Audio transcribed via ElevenLabs:', transcription?.slice(0, 50) + '...');
+          return transcription;
+        }
+      } else {
+        console.warn('ElevenLabs STT failed:', response.status, '- falling back to Gemini');
+      }
+    } catch (e) {
+      console.warn('ElevenLabs STT error, falling back to Gemini:', e);
+    }
+
+    // Fallback: Use Lovable AI (Gemini) for audio transcription via multimodal
+    console.log('🎤 Falling back to Gemini for audio transcription');
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+    if (!lovableApiKey) {
+      console.error('No LOVABLE_API_KEY for Gemini fallback');
       return null;
     }
 
-    const data = await response.json();
-    const transcription = data.text || data.transcription;
-    console.log('✅ Audio transcribed:', transcription?.slice(0, 50) + '...');
-    return transcription || null;
+    // Convert audio to base64 data URI
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    let binaryStr = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      binaryStr += String.fromCharCode(uint8Array[i]);
+    }
+    const base64Audio = btoa(binaryStr);
+    const mimeType = audioBlob.type || 'audio/ogg';
+
+    const geminiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${lovableApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Transcribe this audio message exactly. Return ONLY the transcription text, nothing else. No commentary, no labels, no quotes.' },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Audio}` } },
+            ],
+          },
+        ],
+        max_tokens: 2000,
+      }),
+    });
+
+    if (geminiResp.ok) {
+      const data = await geminiResp.json();
+      const transcription = data.choices?.[0]?.message?.content?.trim();
+      if (transcription && transcription.length > 1) {
+        console.log('✅ Audio transcribed via Gemini fallback:', transcription.slice(0, 50) + '...');
+        return transcription;
+      }
+    } else {
+      console.error('Gemini STT fallback failed:', geminiResp.status, await geminiResp.text());
+    }
+
+    return null;
   } catch (error) {
     console.error('Transcription error:', error);
     return null;
@@ -1011,7 +1086,7 @@ export async function generateVoiceResponse(text: string, elevenLabsKey: string)
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          text: text.slice(0, 5000), // Limit text length
+          text: text.slice(0, 5000),
           model_id: 'eleven_turbo_v2_5',
           voice_settings: {
             stability: 0.5,
@@ -1024,7 +1099,9 @@ export async function generateVoiceResponse(text: string, elevenLabsKey: string)
     );
 
     if (!response.ok) {
-      console.error('ElevenLabs TTS error:', response.status, await response.text());
+      const errText = await response.text();
+      console.error('ElevenLabs TTS error:', response.status, errText);
+      // Don't crash — just skip voice
       return null;
     }
 

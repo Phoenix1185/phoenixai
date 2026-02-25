@@ -708,6 +708,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     textareaRef.current?.focus();
   };
 
+  const handleEditMessage = async (messageId: string, newContent: string) => {
+    if (!user || !conversationId || isLoading) return;
+
+    // Find the message index
+    const msgIndex = messages.findIndex(m => m.id === messageId);
+    if (msgIndex === -1) return;
+
+    // Remove this message and all subsequent messages from UI
+    const messagesBeforeEdit = messages.slice(0, msgIndex);
+    setMessages(messagesBeforeEdit);
+
+    // Delete the edited message and all following from DB
+    const messagesToDelete = messages.slice(msgIndex);
+    for (const msg of messagesToDelete) {
+      if (!msg.id.startsWith('temp-') && !msg.id.startsWith('stream-') && !msg.id.startsWith('error-')) {
+        await supabase.from('messages').delete().eq('id', msg.id);
+      }
+    }
+
+    // Set the edited text as input and submit
+    setInput(newContent);
+    // Use a small delay to let state update, then submit
+    setTimeout(() => {
+      const form = document.querySelector('form');
+      if (form) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+    }, 100);
+  };
+
   return (
     <div className="flex flex-col h-full relative">
       {/* Messages area - scrollable */}
@@ -744,6 +774,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 message={message}
                 onRate={(rating, feedbackText) => { handleRating(message.id, rating, feedbackText); }}
                 onSpeak={voiceOutputSupported ? handleSpeakMessage : undefined}
+                onEdit={handleEditMessage}
                 isSpeaking={isSpeaking}
                 isStreaming={isStreaming && message.id.startsWith('stream-')}
               />

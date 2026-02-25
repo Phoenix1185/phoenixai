@@ -507,6 +507,8 @@ Deno.serve(async (req) => {
           
           const thinkingMsgId = await sendMessage(chatId, '🎤 _Transcribing your voice..._', botToken);
 
+          const isOpenAI = model.startsWith('openai/');
+          const tokenParam = isOpenAI ? { max_completion_tokens: 4096 } : { max_tokens: 4096 };
           const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -520,7 +522,7 @@ Deno.serve(async (req) => {
                 ...history,
                 { role: 'user', content: `[Voice message transcription]: ${transcription}` },
               ],
-              max_tokens: 4096,
+              ...tokenParam,
             }),
           });
 
@@ -817,6 +819,8 @@ Deno.serve(async (req) => {
     }
 
     // Call AI
+    const isOpenAIModel = model.startsWith('openai/');
+    const tokenParamMain = isOpenAIModel ? { max_completion_tokens: 4096 } : { max_tokens: 4096 };
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -829,7 +833,7 @@ Deno.serve(async (req) => {
           { role: 'system', content: systemPrompt },
           ...processedHistory,
         ],
-        max_tokens: 4096,
+        ...tokenParamMain,
       }),
     });
 
