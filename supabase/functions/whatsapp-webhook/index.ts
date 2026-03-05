@@ -598,9 +598,9 @@ async function processWithPhoenixAI(
     const knowledgeEntry = await searchKnowledgeBase(supabase, message);
     if (knowledgeEntry) {
       console.log('📚 Using knowledge base entry:', knowledgeEntry.query_pattern);
-      webContext += `\n\n📚 VERIFIED KNOWLEDGE (previously learned):\n${knowledgeEntry.verified_answer}`;
+      webContext += `\n\n[KNOWLEDGE-REF] ${knowledgeEntry.verified_answer}`;
       if (knowledgeEntry.source_url) {
-        webContext += `\nSource: ${knowledgeEntry.source_url}`;
+        webContext += ` (ref: ${knowledgeEntry.source_url})`;
       }
     }
 
@@ -610,7 +610,7 @@ async function processWithPhoenixAI(
       console.log('🧠 User correction detected, saving to knowledge base');
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, conversationHistory);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
-      webContext += `\n\n✅ LEARNING: I've saved this correction and will remember it for all future conversations.`;
+      webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
     }
   }
 

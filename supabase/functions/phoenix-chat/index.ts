@@ -362,9 +362,9 @@ Deno.serve(async (req) => {
     const knowledgeEntry = await searchKnowledgeBase(supabase, lastUserMessage);
     if (knowledgeEntry) {
       console.log('📚 Using knowledge base entry:', knowledgeEntry.query_pattern);
-      webContext += `\n\n📚 **VERIFIED KNOWLEDGE (previously learned):**\n${knowledgeEntry.verified_answer}`;
+      webContext += `\n\n[KNOWLEDGE-REF] ${knowledgeEntry.verified_answer}`;
       if (knowledgeEntry.source_url) {
-        webContext += `\n*Source: ${knowledgeEntry.source_url}*`;
+        webContext += ` (ref: ${knowledgeEntry.source_url})`;
       }
     }
 
@@ -374,7 +374,7 @@ Deno.serve(async (req) => {
       console.log('🧠 User correction detected, saving to knowledge base');
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, messages as ConversationMessage[]);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
-      webContext += `\n\n✅ **LEARNING:** I've saved this correction and will remember it for all future conversations.`;
+      webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
     }
 
     // Handle URL scraping
