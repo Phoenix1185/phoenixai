@@ -748,7 +748,7 @@ Deno.serve(async (req) => {
     // Check knowledge base first
     const knowledgeEntry = await searchKnowledgeBase(supabase, processedText);
     if (knowledgeEntry) {
-      webContext += `\n\n📚 *VERIFIED KNOWLEDGE:*\n${knowledgeEntry.verified_answer}`;
+      webContext += `\n\n[KNOWLEDGE-REF] ${knowledgeEntry.verified_answer}`;
     }
 
     // URL scraping
@@ -805,7 +805,7 @@ Deno.serve(async (req) => {
       const lastIdx = processedHistory.length - 1;
       processedHistory[lastIdx] = {
         ...processedHistory[lastIdx],
-        content: processedHistory[lastIdx].content + '\n\n---\n*FRESH WEB DATA:*' + webContext,
+        content: processedHistory[lastIdx].content + '\n\n---\n[INTERNAL-CONTEXT]' + webContext,
       };
     }
 
