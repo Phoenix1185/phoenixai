@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Copy, ThumbsUp, ThumbsDown, Check, Volume2, VolumeX, Download, ZoomIn, Pencil } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -39,8 +39,38 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
+  const [showEditPopup, setShowEditPopup] = useState(false);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const isUser = message.role === 'user';
+
+  // Long press handlers for user messages
+  const handlePointerDown = useCallback(() => {
+    if (!isUser || !onEdit || isStreaming || message.id.startsWith('temp-')) return;
+    longPressTimer.current = setTimeout(() => {
+      setShowEditPopup(true);
+    }, 500);
+  }, [isUser, onEdit, isStreaming, message.id]);
+
+  const handlePointerUp = useCallback(() => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  const handlePointerLeave = useCallback(() => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  const startEditing = () => {
+    setEditContent(message.content.replace(/\n\n!\[.*\]\(data:image[^)]+\)/g, ''));
+    setIsEditing(true);
+    setShowEditPopup(false);
+  };
 
   const copyToClipboard = async () => {
     await navigator.clipboard.writeText(message.content);
@@ -180,7 +210,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   };
 
   const renderContent = (content: string) => {
-    // Match both markdown images and also plain base64 images
     const imageRegex = /!\[([^\]]*)\]\((data:image\/[^;]+;base64,[^\)]+|https?:\/\/[^\)]+)\)/g;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
@@ -209,7 +238,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
               className="max-w-full max-h-[400px] object-contain cursor-pointer transition-transform group-hover:scale-[1.02]"
               onClick={() => setViewerImage({ src, alt })}
             />
-            {/* Overlay actions */}
             <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
               <div className="flex items-center justify-end gap-2">
                 <Tooltip>
@@ -255,7 +283,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 10, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.3, ease: "easeOut" }} className={cn('flex gap-3', isUser ? 'justify-end' : 'justify-start')}>
+    <motion.div initial={{ opacity: 0, y: 10, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.3, ease: "easeOut" }} className={cn('flex gap-3 relative', isUser ? 'justify-end' : 'justify-start')}>
       {!isUser && (
         <motion.div animate={isStreaming ? { scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] } : {}} transition={{ duration: 1.5, repeat: isStreaming ? Infinity : 0 }} className="w-8 h-8 rounded-lg gradient-phoenix flex items-center justify-center shrink-0 shadow-lg">
           <svg viewBox="0 0 24 24" fill="none" className={cn('w-4 h-4 text-primary-foreground', isStreaming && 'animate-phoenix-wings')}>
@@ -265,7 +293,19 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         </motion.div>
       )}
 
-      <motion.div layout className={cn('max-w-[80%] rounded-2xl px-4 py-3 shadow-sm', isUser ? 'gradient-phoenix text-primary-foreground' : 'glass-card hover-lift')}>
+      <motion.div 
+        layout 
+        className={cn('max-w-[80%] rounded-2xl px-4 py-3 shadow-sm relative select-none', isUser ? 'gradient-phoenix text-primary-foreground' : 'glass-card hover-lift')}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
+        onContextMenu={(e) => {
+          if (isUser && onEdit && !isStreaming && !message.id.startsWith('temp-')) {
+            e.preventDefault();
+            setShowEditPopup(true);
+          }
+        }}
+      >
         {isEditing ? (
           <div className="space-y-2">
             <Textarea
@@ -291,12 +331,32 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
         )}
 
-        {/* User message actions (edit) */}
-        {isUser && !isStreaming && !isEditing && !message.id.startsWith('temp-') && onEdit && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="flex items-center gap-1 mt-2 pt-1 border-t border-primary-foreground/20">
-            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-primary-foreground/20 text-primary-foreground" onClick={() => { setEditContent(message.content.replace(/\n\n!\[.*\]\(data:image[^)]+\)/g, '')); setIsEditing(true); }}><Pencil className="h-3 w-3" /></Button></TooltipTrigger><TooltipContent>Edit & resend</TooltipContent></Tooltip>
-          </motion.div>
-        )}
+        {/* Long-press edit popup for user messages */}
+        <AnimatePresence>
+          {showEditPopup && isUser && (
+            <>
+              {/* Backdrop to close popup */}
+              <div className="fixed inset-0 z-40" onClick={() => setShowEditPopup(false)} />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8, y: 5 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8, y: 5 }}
+                transition={{ duration: 0.15 }}
+                className="absolute -top-10 right-0 z-50 bg-popover border border-border rounded-lg shadow-lg px-1 py-1"
+              >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-3 text-xs gap-1.5 text-popover-foreground"
+                  onClick={startEditing}
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit & Resend
+                </Button>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
 
         {!isUser && !isStreaming && message.content && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="flex items-center gap-1 mt-3 pt-2 border-t border-border/30">
@@ -310,7 +370,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
 
       {isUser && <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 shadow-sm"><span className="text-xs font-medium">You</span></div>}
       
-      {/* Image viewer modal */}
       {viewerImage && (
         <ImageViewer
           src={viewerImage.src}
@@ -320,7 +379,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         />
       )}
       
-      {/* Feedback modal for detailed negative feedback */}
       <FeedbackModal
         isOpen={showFeedbackModal}
         onClose={() => setShowFeedbackModal(false)}

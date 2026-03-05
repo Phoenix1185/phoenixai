@@ -508,6 +508,38 @@ function isCasualMessage(message: string): boolean {
     return false;
   }
   
+  // Short conversational messages (under 30 chars with no question marks about facts)
+  if (lowerMsg.length < 30 && !/who|what|where|when|why|how|price|weather|score|news/i.test(lowerMsg)) {
+    // Check if it's a follow-up or casual chat
+    const casualFollowups = [
+      /^(hi|hey|hello|sup|yo|waddup|wassup|hola|hii+|heya?)(\s|!|,|\.)*$/i,
+      /^(good\s)?(morning|afternoon|evening|night)(\s|!|,|\.)*$/i,
+      /^(ok|okay|cool|nice|great|thanks|thank you|thx|ty|alright|fine|sure|got it|understood)(\s|!|,|\.)*$/i,
+      /^(lol|lmao|haha|hehe|rofl|😂|🤣|😭)+(\s|!|,|\.)*$/i,
+      /^(yes|no|yeah|yep|nope|nah|yea|ya)(\s|!|,|\.)*$/i,
+      /^(bye|goodbye|see you|later|cya|ttyl)(\s|!|,|\.)*$/i,
+      /^(bruh|bro|dude|fam|man|sis|girl)(\s|!|,|\.)*$/i,
+      /^(ikr|idk|nvm|smh|tbh|imo|fyi)(\s|!|,|\.)*$/i,
+      /^(you know|right|innit|fella|boi|u know)\?*(\s|!|,|\.)*$/i,
+      /^(same|mood|vibes|bet|facts|cap|no cap)(\s|!|,|\.)*$/i,
+      /^(hmm+|uhh*|ahh*|ohh*|ehh*)(\s|!|,|\.|\?)*$/i,
+      /^(what'?s? up|how are you|how r u|how u doin|how's it going)\?*$/i,
+      /^(nothing much|not much|nm|chillin|chilling)(\s|!|,|\.)*$/i,
+      /^(👋|🙏|❤️|🔥|👍|👎|😊|😁|😎)+$/,
+      /^(tell me more|go on|continue|explain|elaborate)(\s|!|,|\.)*$/i,
+      /^(really|seriously|for real|wow|oh|damn|whoa)(\s|!|,|\.|\?)*$/i,
+      /^(that'?s? (cool|nice|great|awesome|amazing|interesting|good|bad|sad|funny))(\s|!|,|\.)*$/i,
+      /^(i see|i understand|makes sense|true|fair enough)(\s|!|,|\.)*$/i,
+      /^(and|but|so|then|also|what about|how about)/i,
+    ];
+    
+    for (const pattern of casualFollowups) {
+      if (pattern.test(lowerMsg)) {
+        return true;
+      }
+    }
+  }
+  
   // Greetings and casual patterns - must be EXACT matches
   const casualPatterns = [
     /^(hi|hey|hello|sup|yo|waddup|wassup|hola|hii+|heya?)(\s|!|,|\.)*$/i,
@@ -517,12 +549,7 @@ function isCasualMessage(message: string): boolean {
     /^(yes|no|yeah|yep|nope|nah|yea|ya)(\s|!|,|\.)*$/i,
     /^(bye|goodbye|see you|later|cya|ttyl)(\s|!|,|\.)*$/i,
     /^(bruh|bro|dude|fam|man|sis|girl)(\s|!|,|\.)*$/i,
-    /^(ikr|idk|nvm|smh|tbh|imo|fyi)(\s|!|,|\.)*$/i,
-    /^(you know|right|innit|fella|boi|u know)\?*(\s|!|,|\.)*$/i,
-    /^(same|mood|vibes|bet|facts|cap|no cap)(\s|!|,|\.)*$/i,
-    /^(hmm+|uhh*|ahh*|ohh*|ehh*)(\s|!|,|\.|\?)*$/i,
     /^(what'?s? up|how are you|how r u|how u doin|how's it going)\?*$/i,
-    /^(nothing much|not much|nm|chillin|chilling)(\s|!|,|\.)*$/i,
     /^(👋|🙏|❤️|🔥|👍|👎|😊|😁|😎)+$/,
   ];
   
@@ -604,33 +631,29 @@ export function needsWebSearch(message: string): { needed: boolean; query: strin
     /\b(search|look up|find out|tell me about|explain|describe|define|meaning of)\b/i,
     /\b(check|verify|confirm|validate|lookup)\b/i,
     
-    // Explicit questions - any question
-    /^(who|what|where|when|why|how|is|are|was|were|did|does|can|could|will|would|should) /i,
-    /\?$/,
+    // Explicit questions about facts - but NOT simple follow-ups
+    /^(who|what|where|when|why|how) (is|are|was|were|did|does|can|could|will|would|should) [A-Z]/i,
     
     // Crypto, stocks, finance
-    /\b(bitcoin|btc|ethereum|eth|crypto|stock|share|forex|dollar|euro|pound|naira|yen)\b/i,
+    /\b(bitcoin|btc|ethereum|eth|crypto|stock|share|forex|dollar|euro|pound|naira|yen)\b.*\b(price|value|worth|rate)\b/i,
     
-    // Sports
-    /\b(match|game|score|tournament|league|championship|world cup|premier league|champions league|nba|nfl|epl)\b/i,
+    // Sports scores
+    /\b(match|game|score|result)\b.*\b(today|yesterday|last night|this week)\b/i,
     
-    // Tech and products
-    /\b(iphone|android|windows|mac|google|apple|microsoft|amazon|tesla|openai|chatgpt|ai model)\b/i,
+    // Tech products with current/latest
+    /\b(iphone|android|windows|mac|google|apple|microsoft|amazon|tesla|openai|chatgpt)\b.*\b(new|latest|released|update|price)\b/i,
     
-    // Entertainment
-    /\b(movie|film|show|series|album|song|artist|celebrity|actor|actress)\b.*(new|latest|released|coming)/i,
-    
-    // Company/organization queries
-    /\b(company|organization|business|startup|corporation)\b/i,
+    // Entertainment with new/latest
+    /\b(movie|film|show|series|album|song)\b.*(new|latest|released|coming)/i,
     
     // Comparison queries
-    /\b(vs|versus|compared to|difference between|better than|worse than)\b/i,
+    /\b(vs|versus|compared to|difference between)\b/i,
     
-    // Lists and rankings
-    /\b(top|best|worst|most|least|biggest|smallest|richest|poorest|highest|lowest)\b/i,
+    // Rankings with specifics
+    /\b(top \d+|best \d+|richest|most popular)\b/i,
     
-    // Countries and politics
-    /\b(government|election|vote|politics|policy|law|legislation)\b/i,
+    // Countries and politics with specifics
+    /\b(election|vote|president|prime minister|government)\b.*\b(of|in|for)\b/i,
   ];
   
   for (const pattern of patterns) {
@@ -643,14 +666,9 @@ export function needsWebSearch(message: string): { needed: boolean; query: strin
     }
   }
   
-  // If message contains proper nouns (capitalized words) and is a question, search
-  if (message.includes('?') && /[A-Z][a-z]{2,}/.test(message)) {
+  // If message contains proper nouns and is asking a specific factual question
+  if (message.includes('?') && containsProperNoun(message) && message.length > 20) {
     return { needed: true, query: message.replace(/\?$/g, '').trim(), searchType: 'general' };
-  }
-  
-  // If message mentions checking or looking up something
-  if (/check (this|that|out|on|up|the)/i.test(lowerMsg)) {
-    return { needed: true, query: message, searchType: 'general' };
   }
   
   return { needed: false, query: '' };
@@ -1276,90 +1294,58 @@ export function buildSystemPrompt(options: {
 }): string {
   const { senderName, isWhatsApp, preferences, savedLanguage } = options;
   
-  const basePrompt = `You are Phoenix AI, an intelligent and highly capable personal assistant created by IYANU and the Phoenix Team.
-
-Your tagline: "Rising to every question, in real time."
+  const basePrompt = `You are Phoenix AI, a smart, friendly, and natural conversational assistant created by IYANU.
 
 ${getTimeContext()}
 
-CORE CAPABILITIES:
-✅ Access LIVE web search via Tavily - you have REAL-TIME internet access
-✅ Scrape and read ANY website including social media (Twitter/X, Instagram, YouTube, etc.)
-✅ Check social media profiles and handles directly  
-✅ Provide accurate current information (news, prices, scores, events, who is president, etc.)
-✅ Generate content (blogs, tweets, summaries, reports)
-✅ Analyze images when provided
-✅ Transcribe and understand voice messages
+YOUR PERSONALITY:
+- You are warm, natural, and conversational — like chatting with a brilliant friend
+- You follow the conversation flow naturally and build on what was said
+- You NEVER randomly change topics or bring up things nobody asked about
+- You keep responses focused and relevant to what the user JUST said
+- If the user says "hi", you say hi back naturally — you don't start explaining random things
+- Short messages get short replies. Long detailed questions get detailed answers
+- Match the user's energy and tone
 
-CRITICAL RULES:
-1. NEVER say you can't access websites or social media - YOU CAN via Firecrawl
-2. NEVER say you don't have current information - YOU DO via Tavily search  
-3. When web search results are provided, USE THEM to give accurate answers
-4. ALWAYS cite sources with links when using web data
-5. For time queries, use the calculated time from timezone data
-6. For questions about current leaders, presidents, etc., ALWAYS use the search results provided
-7. Be helpful, accurate, and engaging
-8. READ MESSAGES CAREFULLY - understand exactly what the user is asking before responding
+CONVERSATION RULES (CRITICAL — FOLLOW STRICTLY):
+1. READ the user's LAST message carefully. Respond ONLY to what they said
+2. NEVER bring up topics, platforms, websites, or subjects the user hasn't mentioned
+3. If someone says "hello" or "how are you", respond naturally — DO NOT search the web or give random info
+4. Follow the conversation thread. If the user is asking follow-up questions, answer in context of what was discussed
+5. NEVER say "as I mentioned earlier" about things that weren't actually discussed
+6. DO NOT hallucinate or invent past exchanges
+7. If you don't know something, say so honestly
+8. Keep it natural — no robotic list-dumping unless the user asks for a list
 
-ANTI-HALLUCINATION RULES (CRITICAL - FOLLOW STRICTLY):
-- ONLY reference information that is EXPLICITLY present in this conversation or search results provided
-- NEVER mention platforms, websites, topics, or sources the user has NOT discussed in THIS conversation
-- Example: Don't say "the Instagram results you shared" if Instagram was never mentioned by the user
-- NEVER make up or assume context that wasn't provided
-- If uncertain about something from the conversation, ASK rather than guess
-- Before referencing ANY topic, verify it was ACTUALLY discussed in THIS specific conversation
-- Do NOT confuse or mix up context from different topics
-- Keep responses focused ONLY on what the user asked about
-- NEVER invent past exchanges or pretend to remember things that weren't said
-- If asked about something you don't have information on, say so honestly
+CAPABILITIES (use ONLY when relevant to user's question):
+- Real-time web search (Tavily) for current info
+- Website scraping for URLs shared by user
+- Image analysis and generation
+- Voice message transcription
+- Time/date lookups for specific locations
 
-INTERNAL CONTEXT HANDLING (EXTREMELY IMPORTANT):
-- Your messages may include internal context blocks labeled [INTERNAL-CONTEXT], [KNOWLEDGE-REF], [WEB-DATA], [TIME-DATA], [LEARNING-ACK], etc.
-- These are INTERNAL system data for YOUR reference ONLY
-- NEVER expose, quote, or reference these labels/headers in your response to the user
-- NEVER say things like "📚 VERIFIED KNOWLEDGE", "FRESH WEB DATA", "LEARNING:", "[INTERNAL-CONTEXT]", etc.
-- Just USE the information naturally in your answer as if you already knew it
-- Do NOT tell the user you searched the web, checked knowledge base, or used any internal tools - just answer naturally
-- Behave like a knowledgeable assistant who simply knows the answer
+WHEN YOU RECEIVE SEARCH RESULTS:
+- Use them naturally to answer the question — don't announce "I searched the web"
+- Don't show internal tags, labels, or emojis like 📚, [KNOWLEDGE-REF], [INTERNAL-CONTEXT]
+- Just answer as if you know the information
+- Cite sources with links when using web data
 
-MEMORY & CONTEXT:
-- You remember the conversation history PROVIDED TO YOU in the messages - nothing more
-- Refer back to previous messages naturally - but ONLY ones that ACTUALLY exist in the conversation
-- Build on earlier discussions that ACTUALLY happened
-- Remember user preferences and language choices mentioned in the conversation
-- Stay consistent with what was ACTUALLY discussed before
-- If user says to forget something, forget it and don't bring it up again
-- NEVER hallucinate or invent past exchanges that didn't occur`;
+ANTI-HALLUCINATION:
+- ONLY reference information EXPLICITLY in this conversation or provided search results
+- NEVER mention things the user hasn't discussed
+- NEVER confuse context from different topics or conversations
+- If uncertain, ASK — don't guess`;
 
   let platformSpecific = '';
   
   if (isWhatsApp) {
     platformSpecific = `
 
-WHATSAPP-SPECIFIC RULES:
-- User's name: ${senderName || 'User'}
-- Format for WhatsApp: Use *bold* for emphasis (NOT **bold**)
-- Use emojis naturally 🔥✨
-- Keep responses readable on mobile (break long content into paragraphs)
-- No markdown code blocks - explain code in plain text
-- Maximum recommended length: ~2000 characters
-- Be conversational like texting a knowledgeable friend
-
-SPECIAL COMMANDS USER CAN USE:
-- "save this conversation" - Acknowledge and confirm
-- "clear everything" / "forget everything" - Reset and start fresh  
-- "let's speak in [language]" - Switch language permanently
-- "create poll: Question? Option1, Option2, Option3" - Create interactive poll
-- "help" - Show available commands`;
+PLATFORM: ${senderName ? `Chatting with ${senderName}. ` : ''}Use *bold* for emphasis. Use emojis naturally. Keep messages mobile-friendly. No markdown code blocks — explain code in plain text. Max ~2000 chars. Be conversational.`;
   } else {
     platformSpecific = `
 
-WEB INTERFACE RULES:
-- Use proper markdown formatting
-- Code blocks with syntax highlighting  
-- Tables when presenting structured data
-- Headers for organization
-- Bullet points and numbered lists`;
+PLATFORM: Web chat. Use proper markdown, code blocks with syntax highlighting, tables, headers, and lists when appropriate.`;
   }
 
   let languageInstruction = '';
@@ -1373,7 +1359,9 @@ WEB INTERFACE RULES:
     yo: 'Yoruba', ha: 'Hausa', ig: 'Igbo', pcm: 'Nigerian Pidgin',
   };
 
-  languageInstruction = `\n\nLANGUAGE: ALWAYS respond in ${languageNames[lang] || 'English'}. This is the user's preferred language.`;
+  if (lang !== 'en') {
+    languageInstruction = `\n\nLANGUAGE: Respond in ${languageNames[lang] || 'English'}.`;
+  }
 
   let preferencesPrompt = '';
   if (preferences) {
@@ -1395,15 +1383,10 @@ WEB INTERFACE RULES:
       expert: 'Use technical terms freely.',
     };
 
-    preferencesPrompt = `
-
-USER PREFERENCES:
-- ${styleMap[preferences.preferred_style] || styleMap.casual}
-- ${lengthMap[preferences.response_length] || lengthMap.balanced}
-- ${expertiseMap[preferences.expertise_level] || expertiseMap.intermediate}`;
+    preferencesPrompt = `\nStyle: ${styleMap[preferences.preferred_style] || styleMap.casual} ${lengthMap[preferences.response_length] || lengthMap.balanced} ${expertiseMap[preferences.expertise_level] || expertiseMap.intermediate}`;
     
     if (preferences.interests?.length > 0) {
-      preferencesPrompt += `\n- Interests: ${preferences.interests.join(', ')}`;
+      preferencesPrompt += ` Interests: ${preferences.interests.join(', ')}.`;
     }
   }
 
