@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.cleanup-expired-cache]
 verify_jwt = false
+
+[functions.ultramsg-webhook]
+verify_jwt = false
