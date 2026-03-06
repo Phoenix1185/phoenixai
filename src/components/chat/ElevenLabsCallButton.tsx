@@ -113,17 +113,41 @@ export default function ElevenLabsCallButton({
     try {
       await conversation.endSession();
       
-      // Optional: Show summary toast
+      // Save voice call transcripts to current conversation for AI training/context
       if (transcripts.length > 0) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            // Build a summary of the voice conversation
+            const voiceSummary = transcripts
+              .map(t => `${t.role === 'user' ? 'User' : 'Phoenix'}: ${t.text}`)
+              .join('\n');
+            
+            // Save as a learning pattern for the AI
+            await supabase.from('knowledge_base').insert({
+              query_pattern: `voice_call_${Date.now()}`,
+              verified_answer: voiceSummary,
+              category: 'voice_call_transcript',
+              confidence_score: 0.8,
+              fetch_source: 'voice_call',
+              created_by: user.id,
+            });
+            
+            console.log('✅ Voice call transcript saved for AI learning');
+          }
+        } catch (saveErr) {
+          console.error('Failed to save voice transcript:', saveErr);
+        }
+
         toast({
           title: "Call ended",
-          description: `${transcripts.length} messages exchanged`,
+          description: `${transcripts.length} messages exchanged & saved`,
         });
       }
     } catch (e) {
       console.error(e);
     }
-  }, [conversation, disabled, isDisconnected, transcripts.length, toast]);
+  }, [conversation, disabled, isDisconnected, transcripts, toast]);
 
   return (
     <>
