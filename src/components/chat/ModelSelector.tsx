@@ -29,7 +29,7 @@ const modelOptions: { value: ModelSpeed; label: string; description: string; ico
   {
     value: 'fast',
     label: 'Fast',
-    description: 'Quick responses, simple tasks',
+    description: 'Gemini 3 Flash Lite — instant',
     icon: <Zap className="h-4 w-4" />,
   },
   {
