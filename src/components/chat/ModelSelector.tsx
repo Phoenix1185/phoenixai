@@ -41,7 +41,7 @@ const modelOptions: { value: ModelSpeed; label: string; description: string; ico
   {
     value: 'powerful',
     label: 'Powerful',
-    description: 'Best quality, complex tasks',
+    description: 'Gemini 3 Pro — best quality',
     icon: <Brain className="h-4 w-4" />,
   },
 ];
