@@ -32,17 +32,17 @@ export interface CommandResult {
 // AI Models available - expanded selection for different tasks
 export const AI_MODELS = {
   // Fast models for quick responses
-  flash: 'google/gemini-2.5-flash',
+  flash: 'google/gemini-3-flash-preview',
   flashLite: 'google/gemini-2.5-flash-lite',
   
   // Smart models for complex reasoning
-  pro: 'google/gemini-2.5-pro',
+  pro: 'google/gemini-3-pro-preview',
   gpt5: 'openai/gpt-5',
   gpt5Mini: 'openai/gpt-5-mini',
   
   // Specialized models
-  vision: 'google/gemini-2.5-pro', // Use Pro for better image understanding
-  reasoning: 'openai/gpt-5.2',     // Best for complex reasoning
+  vision: 'google/gemini-3-pro-preview',
+  reasoning: 'openai/gpt-5.2',
   
   // Next-gen previews
   gemini3Pro: 'google/gemini-3-pro-preview',
@@ -1142,16 +1142,19 @@ export function detectImageGenerationRequest(message: string): {
   
   // Patterns that indicate image generation request
   const generatePatterns = [
-    /generate (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic)/i,
-    /create (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic)/i,
-    /make (?:me )?(?:an? )?(?:image|picture|photo|art|artwork|graphic)/i,
-    /draw (?:me )?(?:an? )?(?:picture|image|artwork|graphic)/i,
+    /generate (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic|logo)/i,
+    /create (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic|logo)/i,
+    /make (?:me )?(?:an? )?(?:image|picture|photo|art|artwork|graphic|logo)/i,
+    /draw (?:me )?(?:an? )?(?:picture|image|artwork|graphic|logo)/i,
     /(?:can you |please )?(?:visualize|illustrate)\b/i,
     /design (?:an? )?(?:logo|banner|poster|image|graphic|icon)/i,
     /^(?:image|picture|photo|art)(?:\s*:|\s+of)\s+/i,
     /paint (?:me )?(?:an? )?/i,
     /show me (?:an? )?(?:image|picture|art) of/i,
     /imagine (?:an? )?/i,
+    /^(?:yes,?\s*)?(?:go ahead|generate|create|make|do it|yes generate|proceed|build)\s*(?:it|that|the (?:image|logo|picture))?\.?$/i,
+    /^generate$/i,
+    /^(?:yes|yeah|yep|sure|ok|okay),?\s*(?:generate|create|make|design|build)?\s*(?:it|that|the (?:image|logo|picture|art))?\.?$/i,
   ];
   
   // High quality indicators

@@ -293,7 +293,28 @@ Deno.serve(async (req) => {
     }
 
     // Check for image generation request
-    const imageRequest = detectImageGenerationRequest(lastUserMessage);
+    let imageRequest = detectImageGenerationRequest(lastUserMessage);
+    
+    // If user says "generate", "yes generate it", etc. - check if previous AI message described an image plan
+    if (!imageRequest.shouldGenerate && /^(yes|yeah|yep|sure|ok|okay|go ahead|generate|create|make|do it|proceed|build)\b/i.test(lastUserMessage.trim())) {
+      // Look back in conversation for a recent image description/plan from the AI
+      const recentAssistantMsgs = messages.filter((m: any) => m.role === 'assistant').slice(-2);
+      for (const assistantMsg of recentAssistantMsgs) {
+        const content = typeof assistantMsg.content === 'string' ? assistantMsg.content.toLowerCase() : '';
+        if (content.includes('logo') || content.includes('design') || content.includes('image') || 
+            content.includes('illustration') || content.includes('visual') || content.includes('graphic') ||
+            content.includes('here\'s what') || content.includes('here is what') || content.includes('i\'ll create') ||
+            content.includes('i can create') || content.includes('i\'d design') || content.includes('concept')) {
+          // Extract a prompt from the AI's description
+          const descContent = typeof assistantMsg.content === 'string' ? assistantMsg.content : '';
+          const prompt = descContent.slice(0, 500).replace(/[*#_\[\]]/g, '').trim();
+          imageRequest = { shouldGenerate: true, prompt, quality: 'high' as const };
+          console.log('🎨 Follow-up generate detected from conversation context');
+          break;
+        }
+      }
+    }
+    
     if (imageRequest.shouldGenerate) {
       console.log('🎨 Web image generation request detected');
       

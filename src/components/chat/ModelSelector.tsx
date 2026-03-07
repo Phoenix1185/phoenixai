@@ -29,19 +29,19 @@ const modelOptions: { value: ModelSpeed; label: string; description: string; ico
   {
     value: 'fast',
     label: 'Fast',
-    description: 'Quick responses, simple tasks',
+    description: 'Gemini 3 Flash Lite — instant',
     icon: <Zap className="h-4 w-4" />,
   },
   {
     value: 'balanced',
     label: 'Balanced',
-    description: 'Good speed & quality',
+    description: 'Gemini 3 Flash — fast & smart',
     icon: <Brain className="h-4 w-4" />,
   },
   {
     value: 'powerful',
     label: 'Powerful',
-    description: 'Best quality, complex tasks',
+    description: 'Gemini 3 Pro — best quality',
     icon: <Brain className="h-4 w-4" />,
   },
 ];
