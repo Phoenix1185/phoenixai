@@ -35,7 +35,7 @@ const modelOptions: { value: ModelSpeed; label: string; description: string; ico
   {
     value: 'balanced',
     label: 'Balanced',
-    description: 'Good speed & quality',
+    description: 'Gemini 3 Flash — fast & smart',
     icon: <Brain className="h-4 w-4" />,
   },
   {
