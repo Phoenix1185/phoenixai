@@ -303,9 +303,11 @@ Deno.serve(async (req) => {
         lovableApiKey
       );
       
-      if (result.success && result.imageBase64) {
-        // Return image as a streamed response
-        const imageResponse = `🎨 **Here's your generated image:**\n\n![Generated Image](data:image/png;base64,${result.imageBase64})\n\n_Prompt: "${imageRequest.prompt}"_`;
+      if (result.success && (result.imageBase64 || result.imageUrl)) {
+        const imgSrc = result.imageBase64 
+          ? `data:image/png;base64,${result.imageBase64}` 
+          : result.imageUrl;
+        const imageResponse = `🎨 **Here's your generated image:**\n\n![Generated Image](${imgSrc})\n\n_Prompt: "${imageRequest.prompt}"_`;
         
         const encoder = new TextEncoder();
         const stream = new ReadableStream({
