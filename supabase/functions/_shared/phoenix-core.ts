@@ -32,17 +32,17 @@ export interface CommandResult {
 // AI Models available - expanded selection for different tasks
 export const AI_MODELS = {
   // Fast models for quick responses
-  flash: 'google/gemini-2.5-flash',
+  flash: 'google/gemini-3-flash-preview',
   flashLite: 'google/gemini-2.5-flash-lite',
   
   // Smart models for complex reasoning
-  pro: 'google/gemini-2.5-pro',
+  pro: 'google/gemini-3-pro-preview',
   gpt5: 'openai/gpt-5',
   gpt5Mini: 'openai/gpt-5-mini',
   
   // Specialized models
-  vision: 'google/gemini-2.5-pro', // Use Pro for better image understanding
-  reasoning: 'openai/gpt-5.2',     // Best for complex reasoning
+  vision: 'google/gemini-3-pro-preview',
+  reasoning: 'openai/gpt-5.2',
   
   // Next-gen previews
   gemini3Pro: 'google/gemini-3-pro-preview',
