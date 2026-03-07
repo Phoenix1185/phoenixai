@@ -1179,38 +1179,28 @@ export function detectImageGenerationRequest(message: string): {
   return { shouldGenerate: false, prompt: '', quality: 'fast' };
 }
 
-// Generate image using Lovable AI Gateway (Nano banana model)
+// Generate image using Lovable AI Gateway - dedicated image generation endpoint
 export async function generateImage(
   prompt: string, 
   quality: 'fast' | 'high',
   apiKey: string
-): Promise<{ success: boolean; imageBase64?: string; error?: string }> {
+): Promise<{ success: boolean; imageBase64?: string; imageUrl?: string; error?: string }> {
   try {
     console.log('🎨 Generating image with prompt:', prompt.slice(0, 100));
     
-    // Use the correct model name for image generation
-    // google/gemini-2.5-flash-image-preview is the "Nano banana" model for image generation
-    const model = quality === 'high' 
-      ? 'google/gemini-3-pro-image-preview'
-      : 'google/gemini-2.5-flash-image-preview';
-    
-    console.log('🎨 Using model:', model);
-    
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    // Use the dedicated image generation endpoint (NOT chat completions)
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/images/generations', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        modalities: ['image', 'text'],
+        model: 'dall-e-3',
+        prompt: prompt,
+        n: 1,
+        size: '1024x1024',
+        quality: quality === 'high' ? 'hd' : 'standard',
       }),
     });
 
@@ -1223,49 +1213,102 @@ export async function generateImage(
       if (response.status === 402) {
         return { success: false, error: 'AI credits depleted' };
       }
-      return { success: false, error: `Generation failed: ${response.status}` };
+      
+      // Fallback: try with chat completions + image modality
+      console.log('🎨 Falling back to chat completions with image modality');
+      return await generateImageFallback(prompt, quality, apiKey);
     }
 
     const data = await response.json();
-    console.log('🎨 API Response structure:', Object.keys(data));
+    console.log('🎨 Image API Response:', JSON.stringify(data).slice(0, 300));
     
-    // Check for images array in the response
+    const imageUrl = data.data?.[0]?.url;
+    const imageB64 = data.data?.[0]?.b64_json;
+    
+    if (imageB64) {
+      console.log('✅ Image generated successfully (base64)');
+      return { success: true, imageBase64: imageB64 };
+    }
+    
+    if (imageUrl) {
+      console.log('✅ Image generated successfully (URL)');
+      // Fetch and convert to base64 for WhatsApp compatibility
+      try {
+        const imgResp = await fetch(imageUrl);
+        const arrayBuffer = await imgResp.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuffer);
+        let binaryStr = '';
+        for (let i = 0; i < uint8.length; i++) {
+          binaryStr += String.fromCharCode(uint8[i]);
+        }
+        const base64 = btoa(binaryStr);
+        return { success: true, imageBase64: base64, imageUrl };
+      } catch (fetchErr) {
+        // Still return the URL even if base64 conversion fails
+        return { success: true, imageUrl };
+      }
+    }
+    
+    console.error('No image in response:', JSON.stringify(data).slice(0, 500));
+    return { success: false, error: 'No image was generated. Please try a different description.' };
+  } catch (error) {
+    console.error('Image generation error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+// Fallback image generation using chat completions with image modality
+async function generateImageFallback(
+  prompt: string,
+  quality: 'fast' | 'high',
+  apiKey: string
+): Promise<{ success: boolean; imageBase64?: string; error?: string }> {
+  try {
+    const model = quality === 'high' 
+      ? 'google/gemini-3-pro-image-preview'
+      : 'google/gemini-2.5-flash-image-preview';
+    
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: `Generate an image: ${prompt}` }],
+        modalities: ['image', 'text'],
+      }),
+    });
+
+    if (!response.ok) {
+      return { success: false, error: `Fallback generation failed: ${response.status}` };
+    }
+
+    const data = await response.json();
     const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
     
     if (imageUrl) {
       if (imageUrl.startsWith('data:image')) {
-        // Extract base64 from data URI
         const base64 = imageUrl.split(',')[1];
-        console.log('✅ Image generated successfully (data URI)');
         return { success: true, imageBase64: base64 };
-      } else {
-        // It's a URL, we need to fetch and convert to base64
-        console.log('🎨 Image URL received, fetching...');
-        try {
-          const imageResponse = await fetch(imageUrl);
-          const imageBlob = await imageResponse.arrayBuffer();
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(imageBlob)));
-          console.log('✅ Image fetched and converted to base64');
-          return { success: true, imageBase64: base64 };
-        } catch (fetchError) {
-          console.error('Failed to fetch image URL:', fetchError);
-          return { success: false, error: 'Failed to download generated image' };
+      }
+      try {
+        const imgResp = await fetch(imageUrl);
+        const arrayBuffer = await imgResp.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuffer);
+        let binaryStr = '';
+        for (let i = 0; i < uint8.length; i++) {
+          binaryStr += String.fromCharCode(uint8[i]);
         }
+        return { success: true, imageBase64: btoa(binaryStr) };
+      } catch {
+        return { success: false, error: 'Failed to download generated image' };
       }
     }
     
-    // Log the full response for debugging
-    console.error('No image in response. Full response:', JSON.stringify(data).slice(0, 500));
-    
-    // Check if the model returned text saying it can't generate images
-    const textContent = data.choices?.[0]?.message?.content;
-    if (textContent && typeof textContent === 'string') {
-      console.log('Model returned text instead of image:', textContent.slice(0, 200));
-    }
-    
-    return { success: false, error: 'No image was generated. The model may not support this request.' };
+    return { success: false, error: 'Image generation not available. Please try again.' };
   } catch (error) {
-    console.error('Image generation error:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
