@@ -61,6 +61,8 @@ interface UltraMsgWebhook {
       type: string;
       body: string;
       caption?: string;
+      fromMe?: boolean;
+      participant?: string;
     };
   };
 }
@@ -140,14 +142,22 @@ async function sendImageMessage(
   }
 }
 
-// Send voice via UltraMsg (expects ogg/opus link or base64)
+// Send voice via UltraMsg
 async function sendVoiceMessage(
   to: string,
-  audioBase64: string,
+  audioBuffer: ArrayBuffer,
   instanceId: string,
   token: string
 ): Promise<boolean> {
   try {
+    // Convert ArrayBuffer to base64
+    const uint8 = new Uint8Array(audioBuffer);
+    let binaryStr = '';
+    for (let i = 0; i < uint8.length; i++) {
+      binaryStr += String.fromCharCode(uint8[i]);
+    }
+    const audioBase64 = btoa(binaryStr);
+
     const response = await fetch(`${ULTRAMSG_BASE}/${instanceId}/messages/voice`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -227,6 +237,45 @@ async function saveMessage(supabase: any, conversationId: string, chatId: string
 // Clear conversation
 async function clearConversation(supabase: any, chatId: string) {
   await supabase.from('whatsapp_messages').delete().eq('chat_id', chatId);
+}
+
+// Update conversation language
+async function updateConversationLanguage(supabase: any, conversationId: string, language: string) {
+  await supabase
+    .from('whatsapp_conversations')
+    .update({ preferred_language: language })
+    .eq('id', conversationId);
+}
+
+// Check if message is from a group
+function isGroupChat(chatId: string): boolean {
+  return chatId.includes('@g.us');
+}
+
+// Check if bot should respond in group
+function shouldRespondInGroup(webhook: UltraMsgWebhook): boolean {
+  const body = (webhook.data?.body || '').toLowerCase();
+  const quotedMsg = webhook.data?.quotedMsg;
+
+  // Check for name mentions
+  const isMentioned = body.includes('@phoenix') ||
+    body.includes('phoenix ai') ||
+    body.includes('hey phoenix') ||
+    body.includes('phoenix');
+
+  // Check if replied (swiped) to a bot message
+  const isReplyToBot = quotedMsg && (
+    quotedMsg.fromMe === true ||
+    (quotedMsg.body || '').endsWith('🔥') ||
+    (quotedMsg.body || '').toLowerCase().includes('phoenix')
+  );
+
+  if (isMentioned || isReplyToBot) {
+    console.log('👥 Group: responding -', isMentioned ? 'mentioned' : 'reply-to-bot');
+    return true;
+  }
+
+  return false;
 }
 
 // Process with Phoenix AI
@@ -420,26 +469,9 @@ Deno.serve(async (req) => {
     }
 
     // For group chats, only respond if mentioned or replied to
-    const isGroup = webhook.data?.isGroup || chatId.includes('@g.us');
+    const isGroup = webhook.data?.isGroup || isGroupChat(chatId);
     if (isGroup) {
-      const body = (webhook.data?.body || '').toLowerCase();
-      const participant = webhook.data?.participant || '';
-      const quotedBody = webhook.data?.quotedMsg?.body?.toLowerCase() || '';
-      
-      // Check multiple mention patterns
-      const isMentioned = body.includes('@phoenix') || 
-                         body.includes('phoenix ai') || 
-                         body.includes('hey phoenix') ||
-                         body.includes('phoenix') ||
-                         body.includes('@' + instanceId); // Bot's own number
-      
-      // Check if it's a reply to a bot message
-      const isReplyToBot = webhook.data?.quotedMsg && (
-        quotedBody.includes('phoenix') || 
-        quotedBody.includes('🔥') // Bot messages often end with fire emoji
-      );
-      
-      if (!isMentioned && !isReplyToBot) {
+      if (!shouldRespondInGroup(webhook)) {
         return new Response(
           JSON.stringify({ status: 'ignored', reason: 'Not mentioned in group' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -514,10 +546,29 @@ Deno.serve(async (req) => {
         );
 
         await saveMessage(supabase, conversation.id, chatId, 'assistant', aiResponse);
-        await sendMessage(chatId, aiResponse, instanceId, token);
+
+        // Try to send voice response back if ElevenLabs is available
+        let voiceSent = false;
+        if (elevenLabsKey && aiResponse.length < 1000) {
+          const voiceBuffer = await generateVoiceResponse(aiResponse, elevenLabsKey);
+          if (voiceBuffer) {
+            voiceSent = await sendVoiceMessage(chatId, voiceBuffer, instanceId, token);
+          }
+        }
+
+        if (!voiceSent) {
+          await sendMessage(chatId, aiResponse, instanceId, token);
+        } else {
+          await sendMessage(
+            chatId,
+            `📝 _Transcription: "${transcription.slice(0, 100)}${transcription.length > 100 ? '...' : ''}"_\n\n${aiResponse}`,
+            instanceId,
+            token
+          );
+        }
 
         return new Response(
-          JSON.stringify({ status: 'success', type: 'voice' }),
+          JSON.stringify({ status: 'success', type: 'voice', voiceResponse: voiceSent }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -584,7 +635,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Special commands
+    // Special commands (help, clear, save, language, poll)
     const command = parseCommand(messageText);
     if (command.isCommand) {
       switch (command.command) {
@@ -594,12 +645,32 @@ Deno.serve(async (req) => {
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         case 'clear':
           await clearConversation(supabase, chatId);
-          await sendMessage(chatId, `🧹 Done ${senderName}! I've cleared our conversation history. Let's start fresh! 🔥`, instanceId, token);
+          await sendMessage(chatId, `🧹 Done ${senderName}! I've cleared our conversation history. Let's start fresh! 🔥\n\nWhat would you like to talk about?`, instanceId, token);
           return new Response(JSON.stringify({ status: 'success', command: 'clear' }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         case 'save':
           await sendMessage(chatId, `💾 Conversation saved ${senderName}! All our chat history is securely stored. 🔥`, instanceId, token);
           return new Response(JSON.stringify({ status: 'success', command: 'save' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        case 'language':
+          if (command.language) {
+            await updateConversationLanguage(supabase, conversation.id, command.language);
+            const langNames: Record<string, string> = {
+              en: 'English', fr: 'French', es: 'Spanish', de: 'German',
+              pt: 'Portuguese', zh: 'Chinese', ja: 'Japanese', ar: 'Arabic',
+              hi: 'Hindi', ru: 'Russian', it: 'Italian', yo: 'Yoruba',
+              ha: 'Hausa', ig: 'Igbo', pcm: 'Nigerian Pidgin',
+            };
+            await sendMessage(chatId, `🗣️ Got it ${senderName}! From now on, I'll respond in *${langNames[command.language] || command.language}*. 🔥`, instanceId, token);
+          }
+          return new Response(JSON.stringify({ status: 'success', command: 'language' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        case 'poll':
+          if (command.pollData) {
+            // UltraMsg doesn't have native poll - use text format
+            await sendMessage(chatId, formatPoll(command.pollData.question, command.pollData.options), instanceId, token);
+          }
+          return new Response(JSON.stringify({ status: 'success', command: 'poll' }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
@@ -624,12 +695,12 @@ Deno.serve(async (req) => {
         }
       }
       await saveMessage(supabase, conversation.id, chatId, 'user', messageText);
-      await sendMessage(chatId, `😔 Sorry ${senderName}, I couldn't generate that image. Please try again! 🔥`, instanceId, token);
+      await sendMessage(chatId, `😔 Sorry ${senderName}, I couldn't generate that image. ${result.error || 'Please try again!'} 🔥`, instanceId, token);
       return new Response(JSON.stringify({ status: 'handled', type: 'image_generation' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // Add quoted message context
+    // Add quoted message context (swipe-reply)
     let contextualMessage = messageText;
     if (webhook.data?.quotedMsg?.body) {
       contextualMessage = `[Replying to: "${webhook.data.quotedMsg.body.slice(0, 300)}"]\n\n${messageText}`;
