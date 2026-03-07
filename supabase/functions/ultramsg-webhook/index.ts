@@ -419,11 +419,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // For group chats, only respond if mentioned
+    // For group chats, only respond if mentioned or replied to
     const isGroup = webhook.data?.isGroup || chatId.includes('@g.us');
     if (isGroup) {
-      const body = webhook.data?.body?.toLowerCase() || '';
-      if (!body.includes('@phoenix') && !body.includes('phoenix ai') && !body.includes('hey phoenix')) {
+      const body = (webhook.data?.body || '').toLowerCase();
+      const participant = webhook.data?.participant || '';
+      const quotedBody = webhook.data?.quotedMsg?.body?.toLowerCase() || '';
+      
+      // Check multiple mention patterns
+      const isMentioned = body.includes('@phoenix') || 
+                         body.includes('phoenix ai') || 
+                         body.includes('hey phoenix') ||
+                         body.includes('phoenix') ||
+                         body.includes('@' + instanceId); // Bot's own number
+      
+      // Check if it's a reply to a bot message
+      const isReplyToBot = webhook.data?.quotedMsg && (
+        quotedBody.includes('phoenix') || 
+        quotedBody.includes('🔥') // Bot messages often end with fire emoji
+      );
+      
+      if (!isMentioned && !isReplyToBot) {
         return new Response(
           JSON.stringify({ status: 'ignored', reason: 'Not mentioned in group' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
