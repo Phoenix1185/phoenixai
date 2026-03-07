@@ -75,12 +75,13 @@ const SharedChat: React.FC = () => {
 
     setForking(true);
     try {
-      // Create a new conversation for this user
+      // Create a new conversation for this user with context about the fork
+      const newTitle = `Continued: ${title}`.slice(0, 50);
       const { data: newConv, error: convError } = await supabase
         .from('conversations')
         .insert({
           user_id: user.id,
-          title: `Continued: ${title}`.slice(0, 50),
+          title: newTitle,
         })
         .select()
         .single();
@@ -90,7 +91,7 @@ const SharedChat: React.FC = () => {
         return;
       }
 
-      // Copy all messages into the new conversation
+      // Copy all messages into the new conversation so AI has full context
       const messagesToInsert = messages.map((msg) => ({
         conversation_id: newConv.id,
         user_id: user.id,
@@ -108,6 +109,14 @@ const SharedChat: React.FC = () => {
           return;
         }
       }
+
+      // Add a system-context message so the AI knows this is a continued conversation
+      await supabase.from('messages').insert({
+        conversation_id: newConv.id,
+        user_id: user.id,
+        role: 'assistant',
+        content: `👋 Welcome! You're continuing a shared conversation about "${title}". I have the full context of what was discussed above. Feel free to pick up where things left off or ask me anything new! 🔥`,
+      });
 
       toast({ description: 'Conversation forked! You can continue chatting.' });
       navigate(`/chat/${newConv.id}`);

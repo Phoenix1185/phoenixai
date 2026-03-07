@@ -70,6 +70,7 @@ async function editImageWithAI(imageUrl: string, prompt: string, apiKey: string)
   try {
     console.log('🎨 Editing/generating art from image with prompt:', prompt.slice(0, 100));
     
+    // First try the dedicated image generation endpoint with the original image as context
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -82,7 +83,7 @@ async function editImageWithAI(imageUrl: string, prompt: string, apiKey: string)
           {
             role: 'user',
             content: [
-              { type: 'text', text: prompt },
+              { type: 'text', text: `Edit this image: ${prompt}` },
               { type: 'image_url', image_url: { url: imageUrl } },
             ],
           },
@@ -100,13 +101,12 @@ async function editImageWithAI(imageUrl: string, prompt: string, apiKey: string)
       if (response.status === 402) {
         return { success: false, error: 'AI credits depleted' };
       }
-      return { success: false, error: `Generation failed: ${response.status}` };
+      return { success: false, error: `Editing failed: ${response.status}` };
     }
 
     const data = await response.json();
     console.log('🎨 Edit API Response structure:', Object.keys(data));
     
-    // Check for images in the response
     const generatedImageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
     
     if (generatedImageUrl) {
@@ -115,12 +115,16 @@ async function editImageWithAI(imageUrl: string, prompt: string, apiKey: string)
         console.log('✅ Image edited successfully (data URI)');
         return { success: true, imageBase64: base64 };
       } else {
-        // It's a URL, fetch and convert to base64
         console.log('🎨 Image URL received, fetching...');
         try {
           const imageResponse = await fetch(generatedImageUrl);
-          const imageBlob = await imageResponse.arrayBuffer();
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(imageBlob)));
+          const arrayBuffer = await imageResponse.arrayBuffer();
+          const uint8 = new Uint8Array(arrayBuffer);
+          let binaryStr = '';
+          for (let i = 0; i < uint8.length; i++) {
+            binaryStr += String.fromCharCode(uint8[i]);
+          }
+          const base64 = btoa(binaryStr);
           console.log('✅ Image fetched and converted to base64');
           return { success: true, imageBase64: base64 };
         } catch (fetchError) {
@@ -130,11 +134,10 @@ async function editImageWithAI(imageUrl: string, prompt: string, apiKey: string)
       }
     }
     
-    // Return text content if no image generated
     const textContent = data.choices?.[0]?.message?.content;
     console.log('No image in response, text:', textContent?.slice(0, 200));
     
-    return { success: false, error: textContent || 'No image was generated' };
+    return { success: false, error: textContent || 'Could not edit the image. Try a different description.' };
   } catch (error) {
     console.error('Image editing error:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
