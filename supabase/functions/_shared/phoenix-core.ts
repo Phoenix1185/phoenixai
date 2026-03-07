@@ -1142,16 +1142,19 @@ export function detectImageGenerationRequest(message: string): {
   
   // Patterns that indicate image generation request
   const generatePatterns = [
-    /generate (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic)/i,
-    /create (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic)/i,
-    /make (?:me )?(?:an? )?(?:image|picture|photo|art|artwork|graphic)/i,
-    /draw (?:me )?(?:an? )?(?:picture|image|artwork|graphic)/i,
+    /generate (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic|logo)/i,
+    /create (?:an? )?(?:image|picture|photo|art|artwork|illustration|graphic|logo)/i,
+    /make (?:me )?(?:an? )?(?:image|picture|photo|art|artwork|graphic|logo)/i,
+    /draw (?:me )?(?:an? )?(?:picture|image|artwork|graphic|logo)/i,
     /(?:can you |please )?(?:visualize|illustrate)\b/i,
     /design (?:an? )?(?:logo|banner|poster|image|graphic|icon)/i,
     /^(?:image|picture|photo|art)(?:\s*:|\s+of)\s+/i,
     /paint (?:me )?(?:an? )?/i,
     /show me (?:an? )?(?:image|picture|art) of/i,
     /imagine (?:an? )?/i,
+    /^(?:yes,?\s*)?(?:go ahead|generate|create|make|do it|yes generate|proceed|build)\s*(?:it|that|the (?:image|logo|picture))?\.?$/i,
+    /^generate$/i,
+    /^(?:yes|yeah|yep|sure|ok|okay),?\s*(?:generate|create|make|design|build)?\s*(?:it|that|the (?:image|logo|picture|art))?\.?$/i,
   ];
   
   // High quality indicators
