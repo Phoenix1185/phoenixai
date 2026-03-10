@@ -641,8 +641,6 @@ Deno.serve(async (req) => {
       console.log('📄 Processing document via UltraMsg');
       const fileName = webhook.data?.body || webhook.data?.caption || 'document';
 
-      await sendMessage(chatId, `📄 Analyzing *${fileName}*... This may take a moment. 🔥`, instanceId, token);
-
       try {
         const docResp = await fetch(webhook.data.media);
         if (!docResp.ok) throw new Error('Failed to download document');
@@ -661,7 +659,6 @@ Deno.serve(async (req) => {
             binaryStr += String.fromCharCode(docBytes[i]);
           }
           const base64Doc = btoa(binaryStr);
-
           const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
             fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
             fileName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
@@ -694,28 +691,43 @@ Deno.serve(async (req) => {
           }
         }
 
-        const caption = (webhook.data?.caption || '').trim();
-        const userPrompt = caption || 'Analyze this document and provide a comprehensive summary with key points.';
+        // Store in pending documents buffer
+        const pendingCount = await storePendingDocument(supabase, chatId, fileName, docContent);
 
-        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${fileName}"] ${caption || ''}`);
+        if (pendingCount === 1) {
+          await sendMessage(
+            chatId,
+            `📄 Got *${fileName}*! 📥\n\nSend more documents within 2 minutes to *compare them*, or reply *"analyze"* to process this one now. 🔥`,
+            instanceId,
+            token
+          );
+          return new Response(
+            JSON.stringify({ status: 'buffered', type: 'document', pendingCount }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        } else {
+          // 2+ documents - auto-trigger comparison
+          const allDocs = await getPendingDocuments(supabase, chatId);
+          await clearPendingDocuments(supabase, chatId);
 
-        const analysisResponse = await processWithPhoenixAI(
-          userPrompt,
-          senderName,
-          history,
-          conversation.preferred_language,
-          `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`,
-          supabase,
-          chatId
-        );
+          const docNames = allDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${allDocs.length} documents*: ${docNames}... 🔥`, instanceId, token);
 
-        await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
-        await sendMessage(chatId, analysisResponse, instanceId, token);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent ${allDocs.length} documents for comparison: ${docNames}]`);
 
-        return new Response(
-          JSON.stringify({ status: 'success', type: 'document', fileName }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+          const caption = (webhook.data?.caption || '').trim();
+          const comparisonResponse = await compareDocuments(
+            allDocs, caption, senderName, history, conversation.preferred_language, supabase, chatId
+          );
+
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, instanceId, token);
+
+          return new Response(
+            JSON.stringify({ status: 'success', type: 'document_comparison', docCount: allDocs.length }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
       } catch (error) {
         console.error('Document analysis error:', error);
         await sendMessage(chatId, `📄 Sorry ${senderName}, I had trouble analyzing "${fileName}". Please try sending it again or paste the text directly. 🔥`, instanceId, token);
