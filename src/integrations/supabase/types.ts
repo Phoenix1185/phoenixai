@@ -204,6 +204,33 @@ export type Database = {
           },
         ]
       }
+      pending_documents: {
+        Row: {
+          chat_id: string
+          created_at: string
+          extracted_text: string
+          file_name: string
+          id: string
+          platform: string
+        }
+        Insert: {
+          chat_id: string
+          created_at?: string
+          extracted_text: string
+          file_name: string
+          id?: string
+          platform?: string
+        }
+        Update: {
+          chat_id?: string
+          created_at?: string
+          extracted_text?: string
+          file_name?: string
+          id?: string
+          platform?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
