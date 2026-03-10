@@ -437,6 +437,72 @@ async function clearConversation(supabase: any, chatId: string): Promise<void> {
   await supabase.from('whatsapp_messages').delete().eq('chat_id', chatId);
 }
 
+// ===== Multi-document buffering =====
+
+async function storePendingDocument(
+  supabase: any, chatId: string, fileName: string, extractedText: string, platform = 'greenapi'
+): Promise<number> {
+  // Clean up old pending docs (older than 5 min)
+  await supabase.from('pending_documents').delete()
+    .eq('chat_id', chatId)
+    .lt('created_at', new Date(Date.now() - 5 * 60 * 1000).toISOString());
+
+  // Insert new
+  await supabase.from('pending_documents').insert({
+    chat_id: chatId, platform, file_name: fileName, extracted_text: extractedText,
+  });
+
+  // Count pending
+  const { count } = await supabase.from('pending_documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('chat_id', chatId);
+  return count || 1;
+}
+
+async function getPendingDocuments(supabase: any, chatId: string): Promise<{ file_name: string; extracted_text: string }[]> {
+  const { data } = await supabase.from('pending_documents')
+    .select('file_name, extracted_text')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: true });
+  return data || [];
+}
+
+async function clearPendingDocuments(supabase: any, chatId: string): Promise<void> {
+  await supabase.from('pending_documents').delete().eq('chat_id', chatId);
+}
+
+async function compareDocuments(
+  docs: { file_name: string; extracted_text: string }[],
+  userPrompt: string,
+  senderName: string,
+  conversationHistory: ConversationMessage[],
+  preferredLanguage: string | undefined,
+  supabase: any,
+  chatId: string
+): Promise<string> {
+  const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
+  const maxCharsPerDoc = Math.floor(25000 / docs.length);
+
+  let docSections = '';
+  for (let i = 0; i < docs.length; i++) {
+    let text = docs[i].extracted_text;
+    if (text.length > maxCharsPerDoc) text = text.slice(0, maxCharsPerDoc) + '\n[... truncated ...]';
+    docSections += `\n\n=== DOCUMENT ${i + 1}: "${docs[i].file_name}" ===\n${text}\n=== END DOCUMENT ${i + 1} ===\n`;
+  }
+
+  const docContext = `\n\n📄 MULTI-DOCUMENT COMPARISON (${docs.length} documents):${docSections}`;
+
+  return processWithPhoenixAI(
+    userPrompt || `Compare these ${docs.length} documents. Highlight key similarities, differences, and unique content in each.`,
+    senderName,
+    conversationHistory,
+    preferredLanguage,
+    docContext,
+    supabase,
+    chatId
+  );
+}
+
 // Update conversation language
 async function updateConversationLanguage(supabase: any, conversationId: string, language: string): Promise<void> {
   await supabase
@@ -1042,39 +1108,32 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Send typing while processing
       sendTypingIndicator(chatId, idInstance, apiToken);
-      await sendMessage(chatId, `📄 Analyzing *${fileName}*... This may take a moment. 🔥`, idInstance, apiToken);
 
       try {
-        // Download the document
+        // Download and extract text
         const docResp = await fetch(docUrl);
         if (!docResp.ok) throw new Error('Failed to download document');
         const docBuffer = await docResp.arrayBuffer();
         const docBytes = new Uint8Array(docBuffer);
 
-        // Convert to base64 data URI for Gemini
         const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|log|sh|yaml|yml|toml|ini)$/i.test(fileName);
         let docContent: string;
 
         if (isTextFile) {
-          // Decode as UTF-8 text
           docContent = new TextDecoder().decode(docBytes);
           if (docContent.length > 30000) docContent = docContent.slice(0, 30000) + '\n\n[... truncated ...]';
         } else {
-          // For PDFs and binary docs, convert to base64 and send to Gemini vision
           let binaryStr = '';
           for (let i = 0; i < docBytes.length; i++) {
             binaryStr += String.fromCharCode(docBytes[i]);
           }
           const base64Doc = btoa(binaryStr);
-
           const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
             fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
             fileName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
             'application/octet-stream';
 
-          // Use Gemini to extract text from the document
           const extractResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -1102,29 +1161,45 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Now analyze the document with full AI context
-        const caption = (anyData?.caption || anyData?.documentMessageData?.caption || '').trim();
-        const userPrompt = caption || 'Analyze this document and provide a comprehensive summary with key points.';
+        // Store in pending documents buffer
+        const pendingCount = await storePendingDocument(supabase, chatId, fileName, docContent, 'greenapi');
 
-        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${fileName}"] ${caption || ''}`);
+        if (pendingCount === 1) {
+          // First document - prompt user to send more or analyze
+          await sendMessage(
+            chatId,
+            `📄 Got *${fileName}*! 📥\n\nSend more documents within 2 minutes to *compare them*, or reply *"analyze"* to process this one now. 🔥`,
+            idInstance,
+            apiToken
+          );
+          return new Response(
+            JSON.stringify({ status: 'buffered', type: 'document', pendingCount }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        } else {
+          // 2+ documents - auto-trigger comparison
+          const allDocs = await getPendingDocuments(supabase, chatId);
+          await clearPendingDocuments(supabase, chatId);
 
-        const analysisResponse = await processWithPhoenixAI(
-          userPrompt,
-          senderName,
-          history,
-          conversation.preferred_language,
-          `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`,
-          supabase,
-          chatId
-        );
+          const docNames = allDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${allDocs.length} documents*: ${docNames}... 🔥`, idInstance, apiToken);
+          sendTypingIndicator(chatId, idInstance, apiToken);
 
-        await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
-        await sendMessage(chatId, analysisResponse, idInstance, apiToken);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent ${allDocs.length} documents for comparison: ${docNames}]`);
 
-        return new Response(
-          JSON.stringify({ status: 'success', type: 'document', fileName }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+          const caption = (anyData?.caption || anyData?.documentMessageData?.caption || '').trim();
+          const comparisonResponse = await compareDocuments(
+            allDocs, caption, senderName, history, conversation.preferred_language, supabase, chatId
+          );
+
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, idInstance, apiToken);
+
+          return new Response(
+            JSON.stringify({ status: 'success', type: 'document_comparison', docCount: allDocs.length }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
       } catch (error) {
         console.error('Document analysis error:', error);
         await sendMessage(chatId, `📄 Sorry ${senderName}, I had trouble analyzing "${fileName}". Please try sending it again or paste the text directly. 🔥`, idInstance, apiToken);
@@ -1264,6 +1339,46 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Check for pending documents trigger ("analyze", "compare", "process")
+    const lowerMessage = messageText.toLowerCase().trim();
+    if (/^(analyze|compare|process|go ahead|do it|yes)$/i.test(lowerMessage)) {
+      const pendingDocs = await getPendingDocuments(supabase, chatId);
+      if (pendingDocs.length > 0) {
+        await clearPendingDocuments(supabase, chatId);
+        sendTypingIndicator(chatId, idInstance, apiToken);
+
+        if (pendingDocs.length === 1) {
+          // Single doc analysis
+          await sendMessage(chatId, `📄 Analyzing *${pendingDocs[0].file_name}*... 🔥`, idInstance, apiToken);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${pendingDocs[0].file_name}"]`);
+
+          const analysisResponse = await processWithPhoenixAI(
+            'Analyze this document and provide a comprehensive summary with key points.',
+            senderName, history, conversation.preferred_language,
+            `\n\n📄 DOCUMENT CONTENT (${pendingDocs[0].file_name}):\n---\n${pendingDocs[0].extracted_text.slice(0, 25000)}\n---`,
+            supabase, chatId
+          );
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
+          await sendMessage(chatId, analysisResponse, idInstance, apiToken);
+        } else {
+          // Multi-doc comparison
+          const docNames = pendingDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${pendingDocs.length} documents*: ${docNames}... 🔥`, idInstance, apiToken);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Comparing ${pendingDocs.length} documents: ${docNames}]`);
+
+          const comparisonResponse = await compareDocuments(
+            pendingDocs, '', senderName, history, conversation.preferred_language, supabase, chatId
+          );
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, idInstance, apiToken);
+        }
+
+        return new Response(
+          JSON.stringify({ status: 'success', type: 'document_trigger', docCount: pendingDocs.length }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
     // Check for image generation request BEFORE regular AI processing
     const imageRequest = detectImageGenerationRequest(messageText);
     if (imageRequest.shouldGenerate) {

@@ -239,6 +239,62 @@ async function clearConversation(supabase: any, chatId: string) {
   await supabase.from('whatsapp_messages').delete().eq('chat_id', chatId);
 }
 
+// ===== Multi-document buffering =====
+
+async function storePendingDocument(
+  supabase: any, chatId: string, fileName: string, extractedText: string
+): Promise<number> {
+  await supabase.from('pending_documents').delete()
+    .eq('chat_id', chatId)
+    .lt('created_at', new Date(Date.now() - 5 * 60 * 1000).toISOString());
+
+  await supabase.from('pending_documents').insert({
+    chat_id: chatId, platform: 'ultramsg', file_name: fileName, extracted_text: extractedText,
+  });
+
+  const { count } = await supabase.from('pending_documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('chat_id', chatId);
+  return count || 1;
+}
+
+async function getPendingDocuments(supabase: any, chatId: string): Promise<{ file_name: string; extracted_text: string }[]> {
+  const { data } = await supabase.from('pending_documents')
+    .select('file_name, extracted_text')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: true });
+  return data || [];
+}
+
+async function clearPendingDocuments(supabase: any, chatId: string): Promise<void> {
+  await supabase.from('pending_documents').delete().eq('chat_id', chatId);
+}
+
+async function compareDocuments(
+  docs: { file_name: string; extracted_text: string }[],
+  userPrompt: string,
+  senderName: string,
+  conversationHistory: ConversationMessage[],
+  preferredLanguage: string | undefined,
+  supabase: any,
+  chatId: string
+): Promise<string> {
+  const maxCharsPerDoc = Math.floor(25000 / docs.length);
+  let docSections = '';
+  for (let i = 0; i < docs.length; i++) {
+    let text = docs[i].extracted_text;
+    if (text.length > maxCharsPerDoc) text = text.slice(0, maxCharsPerDoc) + '\n[... truncated ...]';
+    docSections += `\n\n=== DOCUMENT ${i + 1}: "${docs[i].file_name}" ===\n${text}\n=== END DOCUMENT ${i + 1} ===\n`;
+  }
+
+  return processWithPhoenixAI(
+    userPrompt || `Compare these ${docs.length} documents. Highlight key similarities, differences, and unique content in each.`,
+    senderName, conversationHistory, preferredLanguage,
+    `\n\n📄 MULTI-DOCUMENT COMPARISON (${docs.length} documents):${docSections}`,
+    supabase, chatId
+  );
+}
+
 // Update conversation language
 async function updateConversationLanguage(supabase: any, conversationId: string, language: string) {
   await supabase
@@ -585,8 +641,6 @@ Deno.serve(async (req) => {
       console.log('📄 Processing document via UltraMsg');
       const fileName = webhook.data?.body || webhook.data?.caption || 'document';
 
-      await sendMessage(chatId, `📄 Analyzing *${fileName}*... This may take a moment. 🔥`, instanceId, token);
-
       try {
         const docResp = await fetch(webhook.data.media);
         if (!docResp.ok) throw new Error('Failed to download document');
@@ -605,7 +659,6 @@ Deno.serve(async (req) => {
             binaryStr += String.fromCharCode(docBytes[i]);
           }
           const base64Doc = btoa(binaryStr);
-
           const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
             fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
             fileName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
@@ -638,28 +691,43 @@ Deno.serve(async (req) => {
           }
         }
 
-        const caption = (webhook.data?.caption || '').trim();
-        const userPrompt = caption || 'Analyze this document and provide a comprehensive summary with key points.';
+        // Store in pending documents buffer
+        const pendingCount = await storePendingDocument(supabase, chatId, fileName, docContent);
 
-        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${fileName}"] ${caption || ''}`);
+        if (pendingCount === 1) {
+          await sendMessage(
+            chatId,
+            `📄 Got *${fileName}*! 📥\n\nSend more documents within 2 minutes to *compare them*, or reply *"analyze"* to process this one now. 🔥`,
+            instanceId,
+            token
+          );
+          return new Response(
+            JSON.stringify({ status: 'buffered', type: 'document', pendingCount }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        } else {
+          // 2+ documents - auto-trigger comparison
+          const allDocs = await getPendingDocuments(supabase, chatId);
+          await clearPendingDocuments(supabase, chatId);
 
-        const analysisResponse = await processWithPhoenixAI(
-          userPrompt,
-          senderName,
-          history,
-          conversation.preferred_language,
-          `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`,
-          supabase,
-          chatId
-        );
+          const docNames = allDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${allDocs.length} documents*: ${docNames}... 🔥`, instanceId, token);
 
-        await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
-        await sendMessage(chatId, analysisResponse, instanceId, token);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent ${allDocs.length} documents for comparison: ${docNames}]`);
 
-        return new Response(
-          JSON.stringify({ status: 'success', type: 'document', fileName }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+          const caption = (webhook.data?.caption || '').trim();
+          const comparisonResponse = await compareDocuments(
+            allDocs, caption, senderName, history, conversation.preferred_language, supabase, chatId
+          );
+
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, instanceId, token);
+
+          return new Response(
+            JSON.stringify({ status: 'success', type: 'document_comparison', docCount: allDocs.length }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
       } catch (error) {
         console.error('Document analysis error:', error);
         await sendMessage(chatId, `📄 Sorry ${senderName}, I had trouble analyzing "${fileName}". Please try sending it again or paste the text directly. 🔥`, instanceId, token);
@@ -762,6 +830,43 @@ Deno.serve(async (req) => {
           }
           return new Response(JSON.stringify({ status: 'success', command: 'poll' }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
+
+    // Check for pending documents trigger ("analyze", "compare", "process")
+    if (/^(analyze|compare|process|go ahead|do it|yes)$/i.test(messageText.trim())) {
+      const pendingDocs = await getPendingDocuments(supabase, chatId);
+      if (pendingDocs.length > 0) {
+        await clearPendingDocuments(supabase, chatId);
+
+        if (pendingDocs.length === 1) {
+          await sendMessage(chatId, `📄 Analyzing *${pendingDocs[0].file_name}*... 🔥`, instanceId, token);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${pendingDocs[0].file_name}"]`);
+
+          const analysisResponse = await processWithPhoenixAI(
+            'Analyze this document and provide a comprehensive summary with key points.',
+            senderName, history, conversation.preferred_language,
+            `\n\n📄 DOCUMENT CONTENT (${pendingDocs[0].file_name}):\n---\n${pendingDocs[0].extracted_text.slice(0, 25000)}\n---`,
+            supabase, chatId
+          );
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
+          await sendMessage(chatId, analysisResponse, instanceId, token);
+        } else {
+          const docNames = pendingDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${pendingDocs.length} documents*: ${docNames}... 🔥`, instanceId, token);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Comparing ${pendingDocs.length} documents: ${docNames}]`);
+
+          const comparisonResponse = await compareDocuments(
+            pendingDocs, '', senderName, history, conversation.preferred_language, supabase, chatId
+          );
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, instanceId, token);
+        }
+
+        return new Response(
+          JSON.stringify({ status: 'success', type: 'document_trigger', docCount: pendingDocs.length }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
     }
 
