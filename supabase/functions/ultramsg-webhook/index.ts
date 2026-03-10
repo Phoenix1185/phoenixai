@@ -580,6 +580,96 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Handle document messages (PDF, DOCX, TXT, etc.)
+    if (messageType === 'document' && webhook.data?.media) {
+      console.log('📄 Processing document via UltraMsg');
+      const fileName = webhook.data?.body || webhook.data?.caption || 'document';
+
+      await sendMessage(chatId, `📄 Analyzing *${fileName}*... This may take a moment. 🔥`, instanceId, token);
+
+      try {
+        const docResp = await fetch(webhook.data.media);
+        if (!docResp.ok) throw new Error('Failed to download document');
+        const docBuffer = await docResp.arrayBuffer();
+        const docBytes = new Uint8Array(docBuffer);
+
+        const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|log|sh|yaml|yml|toml|ini)$/i.test(fileName);
+        let docContent: string;
+
+        if (isTextFile) {
+          docContent = new TextDecoder().decode(docBytes);
+          if (docContent.length > 30000) docContent = docContent.slice(0, 30000) + '\n\n[... truncated ...]';
+        } else {
+          let binaryStr = '';
+          for (let i = 0; i < docBytes.length; i++) {
+            binaryStr += String.fromCharCode(docBytes[i]);
+          }
+          const base64Doc = btoa(binaryStr);
+
+          const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
+            fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+            fileName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
+            'application/octet-stream';
+
+          const extractResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${lovableApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'google/gemini-2.5-flash',
+              messages: [{
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'Extract ALL text content from this document. Preserve structure, headings, lists, and formatting. Return the full extracted text.' },
+                  { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Doc}` } },
+                ],
+              }],
+              max_tokens: 8192,
+            }),
+          });
+
+          if (extractResp.ok) {
+            const extractData = await extractResp.json();
+            docContent = extractData.choices?.[0]?.message?.content || '';
+          } else {
+            docContent = '[Could not extract text from this document format]';
+          }
+        }
+
+        const caption = (webhook.data?.caption || '').trim();
+        const userPrompt = caption || 'Analyze this document and provide a comprehensive summary with key points.';
+
+        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${fileName}"] ${caption || ''}`);
+
+        const analysisResponse = await processWithPhoenixAI(
+          userPrompt,
+          senderName,
+          history,
+          conversation.preferred_language,
+          `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`,
+          supabase,
+          chatId
+        );
+
+        await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
+        await sendMessage(chatId, analysisResponse, instanceId, token);
+
+        return new Response(
+          JSON.stringify({ status: 'success', type: 'document', fileName }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (error) {
+        console.error('Document analysis error:', error);
+        await sendMessage(chatId, `📄 Sorry ${senderName}, I had trouble analyzing "${fileName}". Please try sending it again or paste the text directly. 🔥`, instanceId, token);
+        return new Response(
+          JSON.stringify({ status: 'error', type: 'document', error: String(error) }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     // Extract text message
     let messageText = webhook.data?.body || '';
 
@@ -594,7 +684,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      await sendMessage(chatId, `🔥 Hey ${senderName}! Try sending me text, an image, or a voice note and I'll help you out!`, instanceId, token);
+      await sendMessage(chatId, `🔥 Hey ${senderName}! Try sending me text, an image, a voice note, or a document (PDF, TXT, etc.) and I'll help you out!`, instanceId, token);
       return new Response(
         JSON.stringify({ status: 'handled', type: 'non-text' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

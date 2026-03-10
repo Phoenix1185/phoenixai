@@ -1013,6 +1013,128 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Handle document messages (PDF, DOCX, TXT, etc.)
+    if (webhook.messageData?.typeMessage === 'documentMessage') {
+      console.log('📄 Processing document message');
+
+      const anyData: any = webhook.messageData as any;
+      const fileName: string =
+        webhook.messageData?.documentMessage?.fileName ||
+        anyData?.documentMessageData?.fileName ||
+        anyData?.fileMessageData?.fileName ||
+        'document';
+
+      let docUrl: string | null =
+        webhook.messageData?.documentMessage?.downloadUrl ||
+        anyData?.documentMessageData?.downloadUrl ||
+        anyData?.fileMessageData?.downloadUrl ||
+        null;
+
+      if (!docUrl) {
+        docUrl = await resolveDownloadUrl(chatId, webhook.idMessage, idInstance, apiToken);
+      }
+
+      if (!docUrl) {
+        await sendMessage(chatId, "📄 I received your document, but couldn't get a download link. Please resend it and I'll analyze it! 🔥", idInstance, apiToken);
+        return new Response(
+          JSON.stringify({ status: 'partial', type: 'document', error: 'missing_download_url' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Send typing while processing
+      sendTypingIndicator(chatId, idInstance, apiToken);
+      await sendMessage(chatId, `📄 Analyzing *${fileName}*... This may take a moment. 🔥`, idInstance, apiToken);
+
+      try {
+        // Download the document
+        const docResp = await fetch(docUrl);
+        if (!docResp.ok) throw new Error('Failed to download document');
+        const docBuffer = await docResp.arrayBuffer();
+        const docBytes = new Uint8Array(docBuffer);
+
+        // Convert to base64 data URI for Gemini
+        const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|log|sh|yaml|yml|toml|ini)$/i.test(fileName);
+        let docContent: string;
+
+        if (isTextFile) {
+          // Decode as UTF-8 text
+          docContent = new TextDecoder().decode(docBytes);
+          if (docContent.length > 30000) docContent = docContent.slice(0, 30000) + '\n\n[... truncated ...]';
+        } else {
+          // For PDFs and binary docs, convert to base64 and send to Gemini vision
+          let binaryStr = '';
+          for (let i = 0; i < docBytes.length; i++) {
+            binaryStr += String.fromCharCode(docBytes[i]);
+          }
+          const base64Doc = btoa(binaryStr);
+
+          const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
+            fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+            fileName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
+            'application/octet-stream';
+
+          // Use Gemini to extract text from the document
+          const extractResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${lovableApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'google/gemini-2.5-flash',
+              messages: [{
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'Extract ALL text content from this document. Preserve structure, headings, lists, and formatting. Return the full extracted text.' },
+                  { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Doc}` } },
+                ],
+              }],
+              max_tokens: 8192,
+            }),
+          });
+
+          if (extractResp.ok) {
+            const extractData = await extractResp.json();
+            docContent = extractData.choices?.[0]?.message?.content || '';
+          } else {
+            docContent = '[Could not extract text from this document format]';
+          }
+        }
+
+        // Now analyze the document with full AI context
+        const caption = (anyData?.caption || anyData?.documentMessageData?.caption || '').trim();
+        const userPrompt = caption || 'Analyze this document and provide a comprehensive summary with key points.';
+
+        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${fileName}"] ${caption || ''}`);
+
+        const analysisResponse = await processWithPhoenixAI(
+          userPrompt,
+          senderName,
+          history,
+          conversation.preferred_language,
+          `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`,
+          supabase,
+          chatId
+        );
+
+        await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
+        await sendMessage(chatId, analysisResponse, idInstance, apiToken);
+
+        return new Response(
+          JSON.stringify({ status: 'success', type: 'document', fileName }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (error) {
+        console.error('Document analysis error:', error);
+        await sendMessage(chatId, `📄 Sorry ${senderName}, I had trouble analyzing "${fileName}". Please try sending it again or paste the text directly. 🔥`, idInstance, apiToken);
+        return new Response(
+          JSON.stringify({ status: 'error', type: 'document', error: String(error) }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     // Extract text message
     let messageText = '';
     if (webhook.messageData?.textMessageData?.textMessage) {
@@ -1032,11 +1154,9 @@ Deno.serve(async (req) => {
     messageText = messageText.replace(/@phoenix\s*ai/gi, '').replace(/@phoenix/gi, '').trim();
 
     if (!messageText) {
-      // This should rarely happen now since we handle images and voice above
       const msgType = webhook.messageData?.typeMessage || 'unknown';
       console.log('⚠️ No text extracted from message type:', msgType);
       
-      // Don't send generic welcome for stickers, reactions, etc.
       if (msgType === 'stickerMessage' || msgType === 'reactionMessage') {
         return new Response(
           JSON.stringify({ status: 'ignored', type: msgType }),
@@ -1046,7 +1166,7 @@ Deno.serve(async (req) => {
       
       await sendMessage(
         chatId,
-        `🔥 Hey ${senderName}! I received your ${msgType === 'documentMessage' ? 'document' : 'message'}. Try sending me text, an image, or a voice note and I'll help you out!`,
+        `🔥 Hey ${senderName}! Try sending me text, an image, a voice note, or a document (PDF, TXT, etc.) and I'll help you out!`,
         idInstance,
         apiToken
       );
