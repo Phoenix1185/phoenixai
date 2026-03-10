@@ -1339,6 +1339,46 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Check for pending documents trigger ("analyze", "compare", "process")
+    const lowerMessage = messageText.toLowerCase().trim();
+    if (/^(analyze|compare|process|go ahead|do it|yes)$/i.test(lowerMessage)) {
+      const pendingDocs = await getPendingDocuments(supabase, chatId);
+      if (pendingDocs.length > 0) {
+        await clearPendingDocuments(supabase, chatId);
+        sendTypingIndicator(chatId, idInstance, apiToken);
+
+        if (pendingDocs.length === 1) {
+          // Single doc analysis
+          await sendMessage(chatId, `📄 Analyzing *${pendingDocs[0].file_name}*... 🔥`, idInstance, apiToken);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${pendingDocs[0].file_name}"]`);
+
+          const analysisResponse = await processWithPhoenixAI(
+            'Analyze this document and provide a comprehensive summary with key points.',
+            senderName, history, conversation.preferred_language,
+            `\n\n📄 DOCUMENT CONTENT (${pendingDocs[0].file_name}):\n---\n${pendingDocs[0].extracted_text.slice(0, 25000)}\n---`,
+            supabase, chatId
+          );
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
+          await sendMessage(chatId, analysisResponse, idInstance, apiToken);
+        } else {
+          // Multi-doc comparison
+          const docNames = pendingDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${pendingDocs.length} documents*: ${docNames}... 🔥`, idInstance, apiToken);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Comparing ${pendingDocs.length} documents: ${docNames}]`);
+
+          const comparisonResponse = await compareDocuments(
+            pendingDocs, '', senderName, history, conversation.preferred_language, supabase, chatId
+          );
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, idInstance, apiToken);
+        }
+
+        return new Response(
+          JSON.stringify({ status: 'success', type: 'document_trigger', docCount: pendingDocs.length }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
     // Check for image generation request BEFORE regular AI processing
     const imageRequest = detectImageGenerationRequest(messageText);
     if (imageRequest.shouldGenerate) {
