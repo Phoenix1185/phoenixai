@@ -437,6 +437,72 @@ async function clearConversation(supabase: any, chatId: string): Promise<void> {
   await supabase.from('whatsapp_messages').delete().eq('chat_id', chatId);
 }
 
+// ===== Multi-document buffering =====
+
+async function storePendingDocument(
+  supabase: any, chatId: string, fileName: string, extractedText: string, platform = 'greenapi'
+): Promise<number> {
+  // Clean up old pending docs (older than 5 min)
+  await supabase.from('pending_documents').delete()
+    .eq('chat_id', chatId)
+    .lt('created_at', new Date(Date.now() - 5 * 60 * 1000).toISOString());
+
+  // Insert new
+  await supabase.from('pending_documents').insert({
+    chat_id: chatId, platform, file_name: fileName, extracted_text: extractedText,
+  });
+
+  // Count pending
+  const { count } = await supabase.from('pending_documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('chat_id', chatId);
+  return count || 1;
+}
+
+async function getPendingDocuments(supabase: any, chatId: string): Promise<{ file_name: string; extracted_text: string }[]> {
+  const { data } = await supabase.from('pending_documents')
+    .select('file_name, extracted_text')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: true });
+  return data || [];
+}
+
+async function clearPendingDocuments(supabase: any, chatId: string): Promise<void> {
+  await supabase.from('pending_documents').delete().eq('chat_id', chatId);
+}
+
+async function compareDocuments(
+  docs: { file_name: string; extracted_text: string }[],
+  userPrompt: string,
+  senderName: string,
+  conversationHistory: ConversationMessage[],
+  preferredLanguage: string | undefined,
+  supabase: any,
+  chatId: string
+): Promise<string> {
+  const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
+  const maxCharsPerDoc = Math.floor(25000 / docs.length);
+
+  let docSections = '';
+  for (let i = 0; i < docs.length; i++) {
+    let text = docs[i].extracted_text;
+    if (text.length > maxCharsPerDoc) text = text.slice(0, maxCharsPerDoc) + '\n[... truncated ...]';
+    docSections += `\n\n=== DOCUMENT ${i + 1}: "${docs[i].file_name}" ===\n${text}\n=== END DOCUMENT ${i + 1} ===\n`;
+  }
+
+  const docContext = `\n\n📄 MULTI-DOCUMENT COMPARISON (${docs.length} documents):${docSections}`;
+
+  return processWithPhoenixAI(
+    userPrompt || `Compare these ${docs.length} documents. Highlight key similarities, differences, and unique content in each.`,
+    senderName,
+    conversationHistory,
+    preferredLanguage,
+    docContext,
+    supabase,
+    chatId
+  );
+}
+
 // Update conversation language
 async function updateConversationLanguage(supabase: any, conversationId: string, language: string): Promise<void> {
   await supabase
