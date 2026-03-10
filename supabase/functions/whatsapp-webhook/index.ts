@@ -1108,39 +1108,32 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Send typing while processing
       sendTypingIndicator(chatId, idInstance, apiToken);
-      await sendMessage(chatId, `📄 Analyzing *${fileName}*... This may take a moment. 🔥`, idInstance, apiToken);
 
       try {
-        // Download the document
+        // Download and extract text
         const docResp = await fetch(docUrl);
         if (!docResp.ok) throw new Error('Failed to download document');
         const docBuffer = await docResp.arrayBuffer();
         const docBytes = new Uint8Array(docBuffer);
 
-        // Convert to base64 data URI for Gemini
         const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|log|sh|yaml|yml|toml|ini)$/i.test(fileName);
         let docContent: string;
 
         if (isTextFile) {
-          // Decode as UTF-8 text
           docContent = new TextDecoder().decode(docBytes);
           if (docContent.length > 30000) docContent = docContent.slice(0, 30000) + '\n\n[... truncated ...]';
         } else {
-          // For PDFs and binary docs, convert to base64 and send to Gemini vision
           let binaryStr = '';
           for (let i = 0; i < docBytes.length; i++) {
             binaryStr += String.fromCharCode(docBytes[i]);
           }
           const base64Doc = btoa(binaryStr);
-
           const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
             fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
             fileName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
             'application/octet-stream';
 
-          // Use Gemini to extract text from the document
           const extractResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -1168,29 +1161,45 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Now analyze the document with full AI context
-        const caption = (anyData?.caption || anyData?.documentMessageData?.caption || '').trim();
-        const userPrompt = caption || 'Analyze this document and provide a comprehensive summary with key points.';
+        // Store in pending documents buffer
+        const pendingCount = await storePendingDocument(supabase, chatId, fileName, docContent, 'greenapi');
 
-        await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent document: "${fileName}"] ${caption || ''}`);
+        if (pendingCount === 1) {
+          // First document - prompt user to send more or analyze
+          await sendMessage(
+            chatId,
+            `📄 Got *${fileName}*! 📥\n\nSend more documents within 2 minutes to *compare them*, or reply *"analyze"* to process this one now. 🔥`,
+            idInstance,
+            apiToken
+          );
+          return new Response(
+            JSON.stringify({ status: 'buffered', type: 'document', pendingCount }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        } else {
+          // 2+ documents - auto-trigger comparison
+          const allDocs = await getPendingDocuments(supabase, chatId);
+          await clearPendingDocuments(supabase, chatId);
 
-        const analysisResponse = await processWithPhoenixAI(
-          userPrompt,
-          senderName,
-          history,
-          conversation.preferred_language,
-          `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`,
-          supabase,
-          chatId
-        );
+          const docNames = allDocs.map(d => d.file_name).join(', ');
+          await sendMessage(chatId, `📄 Comparing *${allDocs.length} documents*: ${docNames}... 🔥`, idInstance, apiToken);
+          sendTypingIndicator(chatId, idInstance, apiToken);
 
-        await saveMessage(supabase, conversation.id, chatId, 'assistant', analysisResponse);
-        await sendMessage(chatId, analysisResponse, idInstance, apiToken);
+          await saveMessage(supabase, conversation.id, chatId, 'user', `[Sent ${allDocs.length} documents for comparison: ${docNames}]`);
 
-        return new Response(
-          JSON.stringify({ status: 'success', type: 'document', fileName }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+          const caption = (anyData?.caption || anyData?.documentMessageData?.caption || '').trim();
+          const comparisonResponse = await compareDocuments(
+            allDocs, caption, senderName, history, conversation.preferred_language, supabase, chatId
+          );
+
+          await saveMessage(supabase, conversation.id, chatId, 'assistant', comparisonResponse);
+          await sendMessage(chatId, comparisonResponse, idInstance, apiToken);
+
+          return new Response(
+            JSON.stringify({ status: 'success', type: 'document_comparison', docCount: allDocs.length }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
       } catch (error) {
         console.error('Document analysis error:', error);
         await sendMessage(chatId, `📄 Sorry ${senderName}, I had trouble analyzing "${fileName}". Please try sending it again or paste the text directly. 🔥`, idInstance, apiToken);
