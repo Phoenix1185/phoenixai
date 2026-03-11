@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
+import { saveDocumentToHistory, generateDocumentSummary } from "../_shared/phoenix-core.ts";
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
@@ -54,6 +54,9 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json();
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Support both single doc (legacy) and multi-doc
     let documents: DocumentInput[] = [];
@@ -87,6 +90,24 @@ Deno.serve(async (req) => {
     }
 
     const isComparison = documents.length > 1;
+
+    // Save all documents to history for future reference
+    const userId = body.userId || null;
+    for (let i = 0; i < documents.length; i++) {
+      const text = extractedTexts[i];
+      if (text && text.length > 10) {
+        const summary = await generateDocumentSummary(text, documents[i].name, lovableApiKey);
+        await saveDocumentToHistory(supabase, {
+          userId,
+          platform: 'web',
+          platformUserId: userId,
+          fileName: documents[i].name,
+          extractedText: text,
+          summary,
+          conversationId: body.conversationId,
+        });
+      }
+    }
     const userPrompt = body.prompt || (isComparison
       ? 'Compare these documents and highlight key similarities and differences.'
       : 'Analyze this document and provide a comprehensive summary.');

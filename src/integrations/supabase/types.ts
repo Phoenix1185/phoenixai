@@ -18,6 +18,7 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          is_pinned: boolean
           is_shared: boolean
           slug: string | null
           title: string
@@ -27,6 +28,7 @@ export type Database = {
         Insert: {
           created_at?: string
           id?: string
+          is_pinned?: boolean
           is_shared?: boolean
           slug?: string | null
           title?: string
@@ -36,11 +38,48 @@ export type Database = {
         Update: {
           created_at?: string
           id?: string
+          is_pinned?: boolean
           is_shared?: boolean
           slug?: string | null
           title?: string
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      document_history: {
+        Row: {
+          conversation_id: string | null
+          created_at: string
+          extracted_text: string
+          file_name: string
+          id: string
+          platform: string
+          platform_user_id: string | null
+          summary: string | null
+          user_id: string | null
+        }
+        Insert: {
+          conversation_id?: string | null
+          created_at?: string
+          extracted_text: string
+          file_name: string
+          id?: string
+          platform?: string
+          platform_user_id?: string | null
+          summary?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          conversation_id?: string | null
+          created_at?: string
+          extracted_text?: string
+          file_name?: string
+          id?: string
+          platform?: string
+          platform_user_id?: string | null
+          summary?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }

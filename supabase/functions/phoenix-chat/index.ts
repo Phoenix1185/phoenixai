@@ -19,6 +19,10 @@ import {
   learnFromWebSearch,
   selectModel,
   AI_MODELS,
+  searchDocumentHistory,
+  getDocumentHistoryList,
+  detectDocumentReference,
+  formatDocumentHistoryForPrompt,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -401,6 +405,26 @@ Deno.serve(async (req) => {
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, messages as ConversationMessage[]);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
       webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
+    }
+
+    // Check for document reference in user message
+    if (userId) {
+      const docRef = detectDocumentReference(lastUserMessage);
+      if (docRef.hasReference && docRef.fileName) {
+        const matchedDocs = await searchDocumentHistory(supabase, 'web', userId, docRef.fileName);
+        if (matchedDocs.length > 0) {
+          const doc = matchedDocs[0];
+          const docContent = doc.extracted_text.slice(0, 15000);
+          webContext += `\n\n📄 REFERENCED DOCUMENT "${doc.file_name}":\n---\n${docContent}\n---`;
+          console.log('📄 Injected document context:', doc.file_name);
+        }
+      }
+
+      // Add document history list for prompt context
+      const docHistory = await getDocumentHistoryList(supabase, 'web', userId);
+      if (docHistory.length > 0) {
+        webContext += formatDocumentHistoryForPrompt(docHistory);
+      }
     }
 
     // Handle URL scraping

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { MessageSquare, Trash2, Download, Share2 } from 'lucide-react';
+import { MessageSquare, Trash2, Download, Share2, Pin, PinOff } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,6 +30,7 @@ interface Conversation {
   title: string;
   created_at: string;
   updated_at: string;
+  is_pinned?: boolean;
 }
 
 const ChatHistory: React.FC = () => {
@@ -125,6 +126,23 @@ const ChatHistory: React.FC = () => {
     toast({ description: 'Chat exported as Markdown.', duration: 2000 });
   };
 
+  const handleTogglePin = async (conv: Conversation, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user) return;
+
+    const newPinned = !conv.is_pinned;
+    await supabase
+      .from('conversations')
+      .update({ is_pinned: newPinned } as any)
+      .eq('id', conv.id);
+
+    setConversations(prev =>
+      prev.map(c => c.id === conv.id ? { ...c, is_pinned: newPinned } : c)
+    );
+
+    toast({ description: newPinned ? 'Conversation pinned!' : 'Conversation unpinned.', duration: 2000 });
+  };
+
   const handleShare = async (conv: Conversation, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!user) return;
@@ -160,6 +178,7 @@ const ChatHistory: React.FC = () => {
     : conversations;
 
   const groupedConversations = React.useMemo(() => {
+    const pinned: Conversation[] = [];
     const today: Conversation[] = [];
     const yesterday: Conversation[] = [];
     const thisWeek: Conversation[] = [];
@@ -171,6 +190,10 @@ const ChatHistory: React.FC = () => {
     const weekStart = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     filteredConversations.forEach(conv => {
+      if (conv.is_pinned) {
+        pinned.push(conv);
+        return;
+      }
       const convDate = new Date(conv.updated_at);
       if (convDate >= todayStart) today.push(conv);
       else if (convDate >= yesterdayStart) yesterday.push(conv);
@@ -178,7 +201,7 @@ const ChatHistory: React.FC = () => {
       else older.push(conv);
     });
 
-    return { today, yesterday, thisWeek, older };
+    return { pinned, today, yesterday, thisWeek, older };
   }, [filteredConversations]);
 
   if (!user) {
@@ -224,6 +247,9 @@ const ChatHistory: React.FC = () => {
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   <span className="truncate flex-1 text-left">{conv.title}</span>
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => handleTogglePin(conv, e)}>
+                       {conv.is_pinned ? <PinOff className="h-3 w-3 text-primary" /> : <Pin className="h-3 w-3 text-muted-foreground" />}
+                     </Button>
                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => handleShare(conv, e)}>
                        <Share2 className="h-3 w-3 text-muted-foreground" />
                      </Button>
@@ -246,6 +272,7 @@ const ChatHistory: React.FC = () => {
   return (
     <div className="px-2">
       <ConversationSearch onSearch={handleSearch} />
+      {renderGroup('📌 Pinned', groupedConversations.pinned)}
       {renderGroup('Today', groupedConversations.today)}
       {renderGroup('Yesterday', groupedConversations.yesterday)}
       {renderGroup('This Week', groupedConversations.thisWeek)}
