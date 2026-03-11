@@ -54,9 +54,12 @@ export const AI_MODELS = {
 } as const;
 
 // Determine which model to use based on message complexity
-export function selectModel(message: string, hasImage: boolean, hasAudio: boolean): string {
+export function selectModel(message: string, hasImage: boolean, hasAudio: boolean, hasDocument: boolean = false): string {
   if (hasAudio) return AI_MODELS.pro; // Better understanding for transcribed audio
   if (hasImage) return AI_MODELS.vision;
+  
+  // Document analysis and comparison needs strong reasoning
+  if (hasDocument) return AI_MODELS.reasoning;
   
   const lowerMsg = message.toLowerCase();
   const msgLength = message.length;
@@ -73,6 +76,7 @@ export function selectModel(message: string, hasImage: boolean, hasAudio: boolea
     /logic.*puzzle|riddle|brainteaser/i,
     /complex.*problem|multi.?step/i,
     /philosophical|ethical.*dilemma/i,
+    /compare.*document|document.*compar|analyze.*document|document.*analy/i,
   ];
   
   for (const pattern of advancedReasoningPatterns) {
