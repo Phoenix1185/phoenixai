@@ -19,6 +19,10 @@ import {
   learnFromWebSearch,
   selectModel,
   AI_MODELS,
+  searchDocumentHistory,
+  getDocumentHistoryList,
+  detectDocumentReference,
+  formatDocumentHistoryForPrompt,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
