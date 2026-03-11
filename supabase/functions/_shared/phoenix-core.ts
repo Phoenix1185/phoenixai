@@ -1681,3 +1681,169 @@ export function formatMemoriesForPrompt(memories: UserMemory[]): string {
   const facts = memories.map(m => `• ${m.fact}`).join('\n');
   return `\n\nUSER PERSONAL MEMORIES (things the user told you to remember):\n${facts}\n\nUse these facts naturally in conversation. Don't list them unless asked.`;
 }
+
+// ===========================================
+// DOCUMENT HISTORY SYSTEM
+// ===========================================
+
+export interface DocumentHistoryEntry {
+  id: string;
+  user_id?: string;
+  platform: string;
+  platform_user_id?: string;
+  file_name: string;
+  extracted_text: string;
+  summary?: string;
+  conversation_id?: string;
+  created_at: string;
+}
+
+// Save a document to history after analysis
+export async function saveDocumentToHistory(
+  supabase: any,
+  opts: {
+    userId?: string;
+    platform: string;
+    platformUserId?: string;
+    fileName: string;
+    extractedText: string;
+    summary?: string;
+    conversationId?: string;
+  }
+): Promise<boolean> {
+  try {
+    console.log('📄 Saving document to history:', opts.fileName);
+    const { error } = await supabase.from('document_history').insert({
+      user_id: opts.userId || null,
+      platform: opts.platform,
+      platform_user_id: opts.platformUserId || null,
+      file_name: opts.fileName,
+      extracted_text: opts.extractedText.slice(0, 25000),
+      summary: opts.summary || null,
+      conversation_id: opts.conversationId || null,
+    });
+    if (error) {
+      console.error('Document history save error:', error);
+      return false;
+    }
+    console.log('✅ Document saved to history');
+    return true;
+  } catch (error) {
+    console.error('Document history save error:', error);
+    return false;
+  }
+}
+
+// Search document history by filename pattern
+export async function searchDocumentHistory(
+  supabase: any,
+  platform: string,
+  platformUserId: string,
+  searchQuery: string,
+  limit: number = 3
+): Promise<DocumentHistoryEntry[]> {
+  try {
+    const { data, error } = await supabase
+      .from('document_history')
+      .select('*')
+      .eq('platform', platform)
+      .eq('platform_user_id', platformUserId)
+      .ilike('file_name', `%${searchQuery}%`)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('Document history search error:', error);
+      return [];
+    }
+    return data || [];
+  } catch (error) {
+    console.error('Document history search error:', error);
+    return [];
+  }
+}
+
+// Get list of document names for a user (for system prompt injection)
+export async function getDocumentHistoryList(
+  supabase: any,
+  platform: string,
+  platformUserId: string,
+  limit: number = 20
+): Promise<{ file_name: string; created_at: string; summary?: string }[]> {
+  try {
+    const { data, error } = await supabase
+      .from('document_history')
+      .select('file_name, created_at, summary')
+      .eq('platform', platform)
+      .eq('platform_user_id', platformUserId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
+// Detect document reference in user message
+export function detectDocumentReference(message: string): { hasReference: boolean; fileName?: string } {
+  const lowerMsg = message.toLowerCase();
+  
+  const patterns = [
+    /(?:refer(?:ring)? to|from|in|about|regarding|what did|what does|according to)\s+(?:the\s+)?(?:document|file|pdf|doc)?\s*[""']?([^""'?,.\n]+?)[""']?\s*(?:say|mention|state|contain|include|about|,|\?|$)/i,
+    /(?:the|my|that)\s+([a-zA-Z0-9_\-. ]+\.(?:pdf|docx?|txt|csv|xlsx?))/i,
+    /(?:from|in|about)\s+[""']([^""']+)[""']/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (match && match[1]) {
+      const fileName = match[1].trim();
+      if (fileName.length > 2 && fileName.length < 100) {
+        return { hasReference: true, fileName };
+      }
+    }
+  }
+
+  return { hasReference: false };
+}
+
+// Format document history list for system prompt
+export function formatDocumentHistoryForPrompt(docs: { file_name: string; summary?: string }[]): string {
+  if (!docs || docs.length === 0) return '';
+  const list = docs.map(d => `• "${d.file_name}"${d.summary ? ` - ${d.summary.slice(0, 80)}` : ''}`).join('\n');
+  return `\n\nPREVIOUSLY ANALYZED DOCUMENTS (user can reference these by name):\n${list}\n\nIf the user mentions any of these documents, fetch and use their content to answer.`;
+}
+
+// Generate a short summary of document content using AI
+export async function generateDocumentSummary(
+  extractedText: string,
+  fileName: string,
+  apiKey: string
+): Promise<string> {
+  try {
+    const resp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite',
+        messages: [{
+          role: 'user',
+          content: `Summarize this document "${fileName}" in 1-2 sentences (max 120 chars). Focus on the main topic/purpose.\n\n${extractedText.slice(0, 3000)}`,
+        }],
+        max_tokens: 100,
+      }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      return data.choices?.[0]?.message?.content?.trim() || '';
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
