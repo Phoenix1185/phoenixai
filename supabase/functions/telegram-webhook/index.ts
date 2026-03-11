@@ -576,6 +576,229 @@ Deno.serve(async (req) => {
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    // DOCUMENT MESSAGE HANDLING
+    if (message.document) {
+      console.log('📄 Processing Telegram document:', message.document.file_name);
+      const fileName = message.document.file_name || 'document';
+      const fileUrl = await getFileUrl(message.document.file_id, botToken);
+
+      if (fileUrl) {
+        try {
+          await sendTypingAction(chatId, botToken);
+          const thinkingId = await sendMessage(chatId, `📄 _Analyzing "${fileName}"..._`, botToken);
+
+          const docResp = await fetch(fileUrl);
+          if (!docResp.ok) throw new Error('Failed to download document');
+          const docBuffer = await docResp.arrayBuffer();
+          const docBytes = new Uint8Array(docBuffer);
+
+          const isTextFile = /\.(txt|md|csv|json|xml|html|css|js|ts|py|java|log|sh|yaml|yml|toml|ini)$/i.test(fileName);
+          let docContent: string;
+
+          if (isTextFile) {
+            docContent = new TextDecoder().decode(docBytes);
+            if (docContent.length > 30000) docContent = docContent.slice(0, 30000) + '\n\n[... truncated ...]';
+          } else {
+            let binaryStr = '';
+            for (let i = 0; i < docBytes.length; i++) {
+              binaryStr += String.fromCharCode(docBytes[i]);
+            }
+            const base64Doc = btoa(binaryStr);
+            const mimeType = fileName.endsWith('.pdf') ? 'application/pdf' :
+              fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+              'application/octet-stream';
+
+            const extractResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${lovableApiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: 'google/gemini-2.5-flash',
+                messages: [{
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: 'Extract ALL text content from this document. Preserve structure, headings, lists, and formatting. Return the full extracted text.' },
+                    { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Doc}` } },
+                  ],
+                }],
+                max_tokens: 8192,
+              }),
+            });
+
+            if (extractResp.ok) {
+              const extractData = await extractResp.json();
+              docContent = extractData.choices?.[0]?.message?.content || '[Could not extract text]';
+            } else {
+              docContent = '[Could not extract text from this document format]';
+            }
+          }
+
+          // Save to document history
+          const summary = await generateDocumentSummary(docContent, fileName, lovableApiKey);
+          await saveDocumentToHistory(supabase, {
+            platform: 'telegram',
+            platformUserId: chatIdStr,
+            fileName,
+            extractedText: docContent,
+            summary,
+          });
+
+          // Store in pending_documents for multi-doc comparison
+          // Clean up old pending docs
+          await supabase.from('pending_documents').delete()
+            .eq('chat_id', chatIdStr)
+            .lt('created_at', new Date(Date.now() - 5 * 60 * 1000).toISOString());
+
+          await supabase.from('pending_documents').insert({
+            chat_id: chatIdStr, platform: 'telegram', file_name: fileName, extracted_text: docContent,
+          });
+
+          const { count: pendingCount } = await supabase.from('pending_documents')
+            .select('*', { count: 'exact', head: true })
+            .eq('chat_id', chatIdStr);
+
+          if ((pendingCount || 1) === 1) {
+            // Single doc - analyze directly
+            const caption = processedText || 'Analyze this document and provide a comprehensive summary with key points.';
+
+            // Get conversation history
+            let history: ConversationMessage[] = [];
+            if (conversation) {
+              const { data: msgs } = await supabase
+                .from('telegram_messages')
+                .select('role, content')
+                .eq('conversation_id', conversation.id)
+                .order('created_at', { ascending: true })
+                .limit(MAX_CONTEXT_MESSAGES);
+              if (msgs) history = msgs.map((m: any) => ({ role: m.role, content: m.content }));
+            }
+
+            const memories = await getUserMemories(supabase, 'telegram', chatIdStr);
+            const memoriesPrompt = formatMemoriesForPrompt(memories);
+
+            const systemPrompt = buildSystemPrompt({
+              senderName,
+              isWhatsApp: true,
+              savedLanguage: conversation?.preferred_language,
+            }) + memoriesPrompt;
+
+            const docContext = `\n\n📄 DOCUMENT CONTENT (${fileName}):\n---\n${docContent.slice(0, 25000)}\n---`;
+            const model = selectModel(caption, false, false, true);
+
+            const isOpenAI = model.startsWith('openai/');
+            const tokenParam = isOpenAI ? { max_completion_tokens: 4096 } : { max_tokens: 4096 };
+            const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${lovableApiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  ...history,
+                  { role: 'user', content: caption + docContext },
+                ],
+                ...tokenParam,
+              }),
+            });
+
+            let reply = '📄 Could not analyze the document.';
+            if (aiResp.ok) {
+              const aiData = await aiResp.json();
+              reply = aiData.choices?.[0]?.message?.content || reply;
+            }
+
+            await sendMessage(chatId, reply, botToken, thinkingId || undefined);
+
+            if (conversation) {
+              await supabase.from('telegram_messages').insert([
+                { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: `[Document: ${fileName}] ${processedText || ''}` },
+                { conversation_id: conversation.id, chat_id: chatIdStr, role: 'assistant', content: reply },
+              ]);
+            }
+
+            // Clear pending since we processed
+            await supabase.from('pending_documents').delete().eq('chat_id', chatIdStr);
+
+            await sendMessage(chatId, `📄 Got *${fileName}*! Send more documents within 2 minutes to compare, or ask follow-up questions. 🔥`, botToken);
+          } else {
+            // 2+ documents - auto-compare
+            const { data: allPending } = await supabase.from('pending_documents')
+              .select('file_name, extracted_text')
+              .eq('chat_id', chatIdStr)
+              .order('created_at', { ascending: true });
+            const allDocs = allPending || [];
+            await supabase.from('pending_documents').delete().eq('chat_id', chatIdStr);
+
+            const docNames = allDocs.map((d: any) => d.file_name).join(', ');
+            await sendMessage(chatId, `📄 Comparing *${allDocs.length} documents*: ${docNames}...`, botToken, thinkingId || undefined);
+
+            const maxCharsPerDoc = Math.floor(25000 / allDocs.length);
+            let docSections = '';
+            for (let i = 0; i < allDocs.length; i++) {
+              let text = allDocs[i].extracted_text;
+              if (text.length > maxCharsPerDoc) text = text.slice(0, maxCharsPerDoc) + '\n[... truncated ...]';
+              docSections += `\n\n=== DOCUMENT ${i + 1}: "${allDocs[i].file_name}" ===\n${text}\n=== END ===\n`;
+            }
+
+            const memories = await getUserMemories(supabase, 'telegram', chatIdStr);
+            const systemPrompt = buildSystemPrompt({
+              senderName,
+              isWhatsApp: true,
+              savedLanguage: conversation?.preferred_language,
+            }) + formatMemoriesForPrompt(memories);
+
+            const model = selectModel('compare documents', false, false, true);
+            const isOpenAI = model.startsWith('openai/');
+            const tokenParam = isOpenAI ? { max_completion_tokens: 4096 } : { max_tokens: 4096 };
+
+            const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${lovableApiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: `Compare these ${allDocs.length} documents. Highlight key similarities, differences, and unique content in each.${docSections}` },
+                ],
+                ...tokenParam,
+              }),
+            });
+
+            let reply = '📄 Could not compare the documents.';
+            if (aiResp.ok) {
+              const aiData = await aiResp.json();
+              reply = aiData.choices?.[0]?.message?.content || reply;
+            }
+
+            await sendMessage(chatId, reply, botToken);
+
+            if (conversation) {
+              await supabase.from('telegram_messages').insert([
+                { conversation_id: conversation.id, chat_id: chatIdStr, role: 'user', content: `[Compared ${allDocs.length} documents: ${docNames}]` },
+                { conversation_id: conversation.id, chat_id: chatIdStr, role: 'assistant', content: reply },
+              ]);
+            }
+          }
+
+          return new Response(JSON.stringify({ ok: true, type: 'document' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch (error) {
+          console.error('Telegram document analysis error:', error);
+          await sendMessage(chatId, `📄 Sorry, I had trouble analyzing "${fileName}". Please try again! 🔥`, botToken);
+          return new Response(JSON.stringify({ ok: true, type: 'document_error' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+      }
+    }
+
     // Check for memory commands BEFORE regular commands
     const memoryCmd = detectMemoryCommand(processedText);
     if (memoryCmd.type !== 'none') {
