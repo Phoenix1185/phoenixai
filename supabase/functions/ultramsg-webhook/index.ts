@@ -358,6 +358,22 @@ async function processWithPhoenixAI(
   if (supabase && platformUserId) {
     const memories = await getUserMemories(supabase, 'whatsapp', platformUserId);
     memoriesContext = formatMemoriesForPrompt(memories);
+    
+    // Add document history list to system prompt
+    const docHistory = await getDocumentHistoryList(supabase, 'whatsapp', platformUserId);
+    memoriesContext += formatDocumentHistoryForPrompt(docHistory);
+  }
+  
+  // Check for document reference in message  
+  const docRef = detectDocumentReference(message);
+  if (docRef.hasReference && docRef.fileName && supabase && platformUserId) {
+    const matchedDocs = await searchDocumentHistory(supabase, 'whatsapp', platformUserId, docRef.fileName);
+    if (matchedDocs.length > 0) {
+      const doc = matchedDocs[0];
+      const docContent = doc.extracted_text.slice(0, 15000);
+      messageContext = (messageContext || '') + `\n\n📄 REFERENCED DOCUMENT "${doc.file_name}":\n---\n${docContent}\n---`;
+      console.log('📄 Injected document context:', doc.file_name);
+    }
   }
 
   const systemPrompt = buildSystemPrompt({
