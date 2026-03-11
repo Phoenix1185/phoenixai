@@ -90,6 +90,24 @@ Deno.serve(async (req) => {
     }
 
     const isComparison = documents.length > 1;
+
+    // Save all documents to history for future reference
+    const userId = body.userId || null;
+    for (let i = 0; i < documents.length; i++) {
+      const text = extractedTexts[i];
+      if (text && text.length > 10) {
+        const summary = await generateDocumentSummary(text, documents[i].name, lovableApiKey);
+        await saveDocumentToHistory(supabase, {
+          userId,
+          platform: 'web',
+          platformUserId: userId,
+          fileName: documents[i].name,
+          extractedText: text,
+          summary,
+          conversationId: body.conversationId,
+        });
+      }
+    }
     const userPrompt = body.prompt || (isComparison
       ? 'Compare these documents and highlight key similarities and differences.'
       : 'Analyze this document and provide a comprehensive summary.');
