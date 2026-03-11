@@ -30,6 +30,12 @@ import {
   getUserMemories,
   deleteUserMemories,
   formatMemoriesForPrompt,
+  saveDocumentToHistory,
+  searchDocumentHistory,
+  getDocumentHistoryList,
+  detectDocumentReference,
+  formatDocumentHistoryForPrompt,
+  generateDocumentSummary,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
