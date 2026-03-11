@@ -126,6 +126,23 @@ const ChatHistory: React.FC = () => {
     toast({ description: 'Chat exported as Markdown.', duration: 2000 });
   };
 
+  const handleTogglePin = async (conv: Conversation, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user) return;
+
+    const newPinned = !conv.is_pinned;
+    await supabase
+      .from('conversations')
+      .update({ is_pinned: newPinned } as any)
+      .eq('id', conv.id);
+
+    setConversations(prev =>
+      prev.map(c => c.id === conv.id ? { ...c, is_pinned: newPinned } : c)
+    );
+
+    toast({ description: newPinned ? 'Conversation pinned!' : 'Conversation unpinned.', duration: 2000 });
+  };
+
   const handleShare = async (conv: Conversation, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!user) return;
