@@ -272,6 +272,7 @@ const ChatHistory: React.FC = () => {
   return (
     <div className="px-2">
       <ConversationSearch onSearch={handleSearch} />
+      {renderGroup('📌 Pinned', groupedConversations.pinned)}
       {renderGroup('Today', groupedConversations.today)}
       {renderGroup('Yesterday', groupedConversations.yesterday)}
       {renderGroup('This Week', groupedConversations.thisWeek)}
