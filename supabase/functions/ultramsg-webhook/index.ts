@@ -716,6 +716,16 @@ Deno.serve(async (req) => {
         // Store in pending documents buffer
         const pendingCount = await storePendingDocument(supabase, chatId, fileName, docContent);
 
+        // Save to document history for future reference
+        const summary = await generateDocumentSummary(docContent, fileName, lovableApiKey);
+        await saveDocumentToHistory(supabase, {
+          platform: 'whatsapp',
+          platformUserId: chatId,
+          fileName,
+          extractedText: docContent,
+          summary,
+        });
+
         if (pendingCount === 1) {
           await sendMessage(
             chatId,
