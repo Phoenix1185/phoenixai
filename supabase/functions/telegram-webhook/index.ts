@@ -981,6 +981,22 @@ Deno.serve(async (req) => {
     const searchCheck = needsWebSearch(processedText);
     let webContext = '';
 
+    // Check for document reference
+    const docRef = detectDocumentReference(processedText);
+    if (docRef.hasReference && docRef.fileName) {
+      const matchedDocs = await searchDocumentHistory(supabase, 'telegram', chatIdStr, docRef.fileName);
+      if (matchedDocs.length > 0) {
+        const doc = matchedDocs[0];
+        webContext += `\n\n📄 REFERENCED DOCUMENT "${doc.file_name}":\n---\n${doc.extracted_text.slice(0, 15000)}\n---`;
+      }
+    }
+
+    // Add document history list
+    const docHistoryList = await getDocumentHistoryList(supabase, 'telegram', chatIdStr);
+    if (docHistoryList.length > 0) {
+      webContext += formatDocumentHistoryForPrompt(docHistoryList);
+    }
+
     // Check knowledge base first
     const knowledgeEntry = await searchKnowledgeBase(supabase, processedText);
     if (knowledgeEntry) {
