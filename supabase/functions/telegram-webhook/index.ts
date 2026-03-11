@@ -78,6 +78,13 @@ interface TelegramUpdate {
       mime_type?: string;
       file_size?: number;
     };
+    document?: {
+      file_id: string;
+      file_unique_id: string;
+      file_name?: string;
+      mime_type?: string;
+      file_size?: number;
+    };
     reply_to_message?: {
       message_id: number;
       from?: {
