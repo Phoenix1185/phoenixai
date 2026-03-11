@@ -178,6 +178,7 @@ const ChatHistory: React.FC = () => {
     : conversations;
 
   const groupedConversations = React.useMemo(() => {
+    const pinned: Conversation[] = [];
     const today: Conversation[] = [];
     const yesterday: Conversation[] = [];
     const thisWeek: Conversation[] = [];
@@ -189,6 +190,10 @@ const ChatHistory: React.FC = () => {
     const weekStart = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     filteredConversations.forEach(conv => {
+      if (conv.is_pinned) {
+        pinned.push(conv);
+        return;
+      }
       const convDate = new Date(conv.updated_at);
       if (convDate >= todayStart) today.push(conv);
       else if (convDate >= yesterdayStart) yesterday.push(conv);
@@ -196,7 +201,7 @@ const ChatHistory: React.FC = () => {
       else older.push(conv);
     });
 
-    return { today, yesterday, thisWeek, older };
+    return { pinned, today, yesterday, thisWeek, older };
   }, [filteredConversations]);
 
   if (!user) {
