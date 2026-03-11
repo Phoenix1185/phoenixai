@@ -247,6 +247,9 @@ const ChatHistory: React.FC = () => {
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   <span className="truncate flex-1 text-left">{conv.title}</span>
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => handleTogglePin(conv, e)}>
+                       {conv.is_pinned ? <PinOff className="h-3 w-3 text-primary" /> : <Pin className="h-3 w-3 text-muted-foreground" />}
+                     </Button>
                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => handleShare(conv, e)}>
                        <Share2 className="h-3 w-3 text-muted-foreground" />
                      </Button>
