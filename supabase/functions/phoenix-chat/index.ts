@@ -404,7 +404,7 @@ Deno.serve(async (req) => {
       console.log('🧠 User correction detected, saving to knowledge base');
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, messages as ConversationMessage[]);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
-      webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
+      // Correction saved silently — no internal tag injected into context
     }
 
     // Check for document reference in user message
