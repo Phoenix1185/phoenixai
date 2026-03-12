@@ -749,7 +749,7 @@ async function processWithPhoenixAI(
     console.log('🔍 General search:', searchCheck.query);
     const results = await performTavilySearch(searchCheck.query, tavilyApiKey);
     if (results.results.length > 0) {
-      webContext += '\n\n🔍 Live Web Search Results:\n';
+      webContext += '\n\nLive Web Search Results:\n';
       if (results.answer) webContext += `Quick Answer: ${results.answer}\n\n`;
       for (const r of results.results.slice(0, 6)) {
         webContext += `• ${r.title}: ${r.content.slice(0, 500)}\nSource: ${r.url}\n\n`;

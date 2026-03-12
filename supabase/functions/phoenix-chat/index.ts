@@ -471,9 +471,9 @@ Deno.serve(async (req) => {
       const searchResults = await performTavilySearch(searchCheck.query, tavilyApiKey);
       
       if (searchResults.results.length > 0) {
-        webContext += '\n\n🔍 **Live Web Search Results:**\n';
+        webContext += '\n\n**Live Web Search Results:**\n';
         if (searchResults.answer) {
-          webContext += `\n📝 Quick Answer: ${searchResults.answer}\n`;
+          webContext += `\nQuick Answer: ${searchResults.answer}\n`;
         }
         for (const result of searchResults.results.slice(0, 6)) {
           webContext += `\n### ${result.title}\n${result.content.slice(0, 800)}\n*Source: ${result.url}*\n`;

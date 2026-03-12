@@ -1057,7 +1057,7 @@ Deno.serve(async (req) => {
       const lastIdx = processedHistory.length - 1;
       processedHistory[lastIdx] = {
         ...processedHistory[lastIdx],
-        content: processedHistory[lastIdx].content + '\n\n---\n[INTERNAL-CONTEXT]' + webContext,
+        content: processedHistory[lastIdx].content + '\n\n---\nAdditional context: ' + webContext,
       };
     }
 
