@@ -36,6 +36,7 @@ import {
   detectDocumentReference,
   formatDocumentHistoryForPrompt,
   generateDocumentSummary,
+  autoDetectAndSetLanguage,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -1465,6 +1466,15 @@ Deno.serve(async (req) => {
         JSON.stringify({ status: 'handled', type: 'image_generation', error: result.error }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Auto-detect language from first message
+    const detectedLang = await autoDetectAndSetLanguage(
+      supabase, 'whatsapp_conversations', conversation.id,
+      conversation.preferred_language, messageText, lovableApiKey
+    );
+    if (detectedLang && detectedLang !== conversation.preferred_language) {
+      conversation.preferred_language = detectedLang;
     }
 
     console.log(`🧠 Processing: ${senderName} (${history.length} messages in history)`);

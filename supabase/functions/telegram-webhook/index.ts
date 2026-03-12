@@ -35,6 +35,7 @@ import {
   detectDocumentReference,
   formatDocumentHistoryForPrompt,
   generateDocumentSummary,
+  autoDetectAndSetLanguage,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
@@ -954,6 +955,15 @@ Deno.serve(async (req) => {
       
       return new Response(JSON.stringify({ ok: true }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // Auto-detect language from first message
+    const detectedLang = await autoDetectAndSetLanguage(
+      supabase, 'telegram_conversations', conversation?.id,
+      conversation?.preferred_language, processedText, lovableApiKey
+    );
+    if (conversation && detectedLang && detectedLang !== conversation.preferred_language) {
+      conversation.preferred_language = detectedLang;
     }
 
     // Get conversation history

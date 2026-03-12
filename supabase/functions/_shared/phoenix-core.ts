@@ -1687,6 +1687,88 @@ export function formatMemoriesForPrompt(memories: UserMemory[]): string {
 }
 
 // ===========================================
+// LANGUAGE AUTO-DETECTION
+// ===========================================
+
+// Detect the language of a message using AI (lightweight call)
+export async function detectLanguage(
+  message: string,
+  apiKey: string
+): Promise<string | null> {
+  try {
+    if (message.length < 3) return null;
+    
+    // Quick heuristic checks for common languages before calling AI
+    const heuristics: [RegExp, string][] = [
+      [/[\u0600-\u06FF]/, 'ar'],  // Arabic
+      [/[\u4e00-\u9fff]/, 'zh'],  // Chinese
+      [/[\u3040-\u309f\u30a0-\u30ff]/, 'ja'],  // Japanese
+      [/[\uac00-\ud7af]/, 'ko'],  // Korean
+      [/[\u0900-\u097F]/, 'hi'],  // Hindi/Devanagari
+      [/[\u0400-\u04FF]/, 'ru'],  // Cyrillic/Russian
+    ];
+    
+    for (const [pattern, lang] of heuristics) {
+      if (pattern.test(message)) return lang;
+    }
+    
+    // For Latin-script languages, use AI to detect
+    const resp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite',
+        messages: [{
+          role: 'user',
+          content: `Detect the language of this text and return ONLY the 2-letter ISO 639-1 code (e.g., en, fr, es, de, pt, yo, ha, ig, sw, pcm). If Nigerian Pidgin, return "pcm". Return ONLY the code, nothing else.\n\nText: "${message.slice(0, 200)}"`,
+        }],
+        max_tokens: 10,
+      }),
+    });
+    
+    if (resp.ok) {
+      const data = await resp.json();
+      const code = data.choices?.[0]?.message?.content?.trim()?.toLowerCase()?.replace(/[^a-z]/g, '');
+      if (code && code.length >= 2 && code.length <= 3) {
+        console.log('🌐 Language detected:', code);
+        return code;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('Language detection error:', error);
+    return null;
+  }
+}
+
+// Auto-detect and set language for a conversation (only on first message)
+export async function autoDetectAndSetLanguage(
+  supabase: any,
+  table: 'whatsapp_conversations' | 'telegram_conversations',
+  conversationId: string,
+  currentLanguage: string | null | undefined,
+  messageText: string,
+  apiKey: string
+): Promise<string | null> {
+  // Only auto-detect if language hasn't been explicitly set (still default 'en' or null)
+  if (currentLanguage && currentLanguage !== 'en') return currentLanguage;
+  
+  const detectedLang = await detectLanguage(messageText, apiKey);
+  if (detectedLang && detectedLang !== 'en') {
+    console.log(`🌐 Auto-setting language to ${detectedLang} for conversation ${conversationId}`);
+    await supabase
+      .from(table)
+      .update({ preferred_language: detectedLang })
+      .eq('id', conversationId);
+    return detectedLang;
+  }
+  return currentLanguage || 'en';
+}
+
+// ===========================================
 // DOCUMENT HISTORY SYSTEM
 // ===========================================
 
