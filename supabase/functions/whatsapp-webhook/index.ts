@@ -707,7 +707,7 @@ async function processWithPhoenixAI(
   if (timeCheck.isTime && timeCheck.location) {
     const timeInfo = getTimeForLocation(timeCheck.location);
     if (timeInfo) {
-      webContext += `\n\n⏰ TIME INFO: ${timeInfo}`;
+      webContext += `\n\nCurrent time info: ${timeInfo}`;
     }
   }
 
