@@ -1376,7 +1376,7 @@ CAPABILITIES (use ONLY when relevant to user's question):
 
 WHEN YOU RECEIVE SEARCH RESULTS:
 - Use them naturally to answer the question — don't announce "I searched the web"
-- Don't show internal tags, labels, or emojis like 📚, [KNOWLEDGE-REF], [INTERNAL-CONTEXT]
+- Don't show internal tags, labels, or prefixes like [KNOWLEDGE-REF], [INTERNAL-CONTEXT], [LEARNING-ACK], "Verified information:", "Additional context:", "Current time info:"
 - Just answer as if you know the information
 - Cite sources with links when using web data
 

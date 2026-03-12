@@ -1019,7 +1019,7 @@ Deno.serve(async (req) => {
     if (socialQuery && tavilyApiKey) {
       const results = await performTavilySearch(socialQuery.query, tavilyApiKey);
       if (results.results.length > 0) {
-        webContext += `\n\n🔍 *${socialQuery.platform} Results:*\n`;
+        webContext += `\n\n*${socialQuery.platform} Results:*\n`;
         if (results.answer) webContext += `${results.answer}\n`;
         for (const r of results.results.slice(0, 3)) {
           webContext += `• ${r.title}: ${r.content.slice(0, 300)}\n`;
@@ -1031,7 +1031,7 @@ Deno.serve(async (req) => {
     if (searchCheck.needed && !socialQuery && tavilyApiKey && webContext.length < 500) {
       const results = await performTavilySearch(searchCheck.query, tavilyApiKey);
       if (results.results.length > 0) {
-        webContext += '\n\n🔍 *Web Search Results:*\n';
+        webContext += '\n\n*Web Search Results:*\n';
         if (results.answer) webContext += `${results.answer}\n`;
         for (const r of results.results.slice(0, 4)) {
           webContext += `• ${r.title}: ${r.content.slice(0, 400)}\n`;
@@ -1057,7 +1057,7 @@ Deno.serve(async (req) => {
       const lastIdx = processedHistory.length - 1;
       processedHistory[lastIdx] = {
         ...processedHistory[lastIdx],
-        content: processedHistory[lastIdx].content + '\n\n---\n[INTERNAL-CONTEXT]' + webContext,
+        content: processedHistory[lastIdx].content + '\n\n---\nAdditional context: ' + webContext,
       };
     }
 

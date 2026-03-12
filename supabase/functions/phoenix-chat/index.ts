@@ -404,7 +404,7 @@ Deno.serve(async (req) => {
       console.log('🧠 User correction detected, saving to knowledge base');
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, messages as ConversationMessage[]);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
-      webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
+      // Correction saved silently — no internal tag injected into context
     }
 
     // Check for document reference in user message
@@ -452,9 +452,9 @@ Deno.serve(async (req) => {
       const searchResults = await performTavilySearch(socialQuery.query, tavilyApiKey);
       
       if (searchResults.results.length > 0) {
-        webContext += `\n\n🔍 **${socialQuery.platform} Search Results for ${socialQuery.handle || 'query'}:**\n`;
+        webContext += `\n\n**${socialQuery.platform} Search Results for ${socialQuery.handle || 'query'}:**\n`;
         if (searchResults.answer) {
-          webContext += `\n📝 Summary: ${searchResults.answer}\n`;
+          webContext += `\nSummary: ${searchResults.answer}\n`;
         }
         for (const result of searchResults.results.slice(0, 5)) {
           webContext += `\n• **${result.title}**\n${result.content.slice(0, 500)}\nSource: ${result.url}\n`;
@@ -471,9 +471,9 @@ Deno.serve(async (req) => {
       const searchResults = await performTavilySearch(searchCheck.query, tavilyApiKey);
       
       if (searchResults.results.length > 0) {
-        webContext += '\n\n🔍 **Live Web Search Results:**\n';
+        webContext += '\n\n**Live Web Search Results:**\n';
         if (searchResults.answer) {
-          webContext += `\n📝 Quick Answer: ${searchResults.answer}\n`;
+          webContext += `\nQuick Answer: ${searchResults.answer}\n`;
         }
         for (const result of searchResults.results.slice(0, 6)) {
           webContext += `\n### ${result.title}\n${result.content.slice(0, 800)}\n*Source: ${result.url}*\n`;

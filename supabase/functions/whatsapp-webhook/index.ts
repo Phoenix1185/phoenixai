@@ -698,7 +698,7 @@ async function processWithPhoenixAI(
       console.log('🧠 User correction detected, saving to knowledge base');
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, conversationHistory);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
-      webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
+      // Correction saved silently — no internal tag injected into context
     }
   }
 
@@ -707,7 +707,7 @@ async function processWithPhoenixAI(
   if (timeCheck.isTime && timeCheck.location) {
     const timeInfo = getTimeForLocation(timeCheck.location);
     if (timeInfo) {
-      webContext += `\n\n⏰ TIME INFO: ${timeInfo}`;
+      webContext += `\n\nCurrent time info: ${timeInfo}`;
     }
   }
 
@@ -730,7 +730,7 @@ async function processWithPhoenixAI(
     console.log('📱 Social search:', socialQuery.query);
     const results = await performTavilySearch(socialQuery.query, tavilyApiKey);
     if (results.results.length > 0) {
-      webContext += `\n\n🔍 ${socialQuery.platform} Search Results:\n`;
+      webContext += `\n\n${socialQuery.platform} Search Results:\n`;
       if (results.answer) webContext += `Summary: ${results.answer}\n\n`;
       for (const r of results.results.slice(0, 5)) {
         webContext += `• ${r.title}: ${r.content.slice(0, 400)}\nSource: ${r.url}\n\n`;
@@ -749,7 +749,7 @@ async function processWithPhoenixAI(
     console.log('🔍 General search:', searchCheck.query);
     const results = await performTavilySearch(searchCheck.query, tavilyApiKey);
     if (results.results.length > 0) {
-      webContext += '\n\n🔍 Live Web Search Results:\n';
+      webContext += '\n\nLive Web Search Results:\n';
       if (results.answer) webContext += `Quick Answer: ${results.answer}\n\n`;
       for (const r of results.results.slice(0, 6)) {
         webContext += `• ${r.title}: ${r.content.slice(0, 500)}\nSource: ${r.url}\n\n`;
