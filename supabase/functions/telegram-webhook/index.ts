@@ -1031,7 +1031,7 @@ Deno.serve(async (req) => {
     if (searchCheck.needed && !socialQuery && tavilyApiKey && webContext.length < 500) {
       const results = await performTavilySearch(searchCheck.query, tavilyApiKey);
       if (results.results.length > 0) {
-        webContext += '\n\n🔍 *Web Search Results:*\n';
+        webContext += '\n\n*Web Search Results:*\n';
         if (results.answer) webContext += `${results.answer}\n`;
         for (const r of results.results.slice(0, 4)) {
           webContext += `• ${r.title}: ${r.content.slice(0, 400)}\n`;
