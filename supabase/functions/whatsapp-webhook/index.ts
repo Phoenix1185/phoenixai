@@ -730,7 +730,7 @@ async function processWithPhoenixAI(
     console.log('📱 Social search:', socialQuery.query);
     const results = await performTavilySearch(socialQuery.query, tavilyApiKey);
     if (results.results.length > 0) {
-      webContext += `\n\n🔍 ${socialQuery.platform} Search Results:\n`;
+      webContext += `\n\n${socialQuery.platform} Search Results:\n`;
       if (results.answer) webContext += `Summary: ${results.answer}\n\n`;
       for (const r of results.results.slice(0, 5)) {
         webContext += `• ${r.title}: ${r.content.slice(0, 400)}\nSource: ${r.url}\n\n`;
