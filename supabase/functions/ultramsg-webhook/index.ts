@@ -404,7 +404,7 @@ async function processWithPhoenixAI(
   const timeCheck = isTimeQuery(message);
   if (timeCheck.isTime && timeCheck.location) {
     const timeInfo = getTimeForLocation(timeCheck.location);
-    if (timeInfo) webContext += `\n\n⏰ TIME INFO: ${timeInfo}`;
+    if (timeInfo) webContext += `\n\nCurrent time info: ${timeInfo}`;
   }
 
   // URLs
