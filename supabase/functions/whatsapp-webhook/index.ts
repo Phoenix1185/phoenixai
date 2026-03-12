@@ -36,6 +36,7 @@ import {
   detectDocumentReference,
   formatDocumentHistoryForPrompt,
   generateDocumentSummary,
+  autoDetectAndSetLanguage,
 } from "../_shared/phoenix-core.ts";
 
 const corsHeaders = {
