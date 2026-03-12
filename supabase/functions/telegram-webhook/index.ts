@@ -957,6 +957,15 @@ Deno.serve(async (req) => {
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    // Auto-detect language from first message
+    const detectedLang = await autoDetectAndSetLanguage(
+      supabase, 'telegram_conversations', conversation?.id,
+      conversation?.preferred_language, processedText, lovableApiKey
+    );
+    if (conversation && detectedLang && detectedLang !== conversation.preferred_language) {
+      conversation.preferred_language = detectedLang;
+    }
+
     // Get conversation history
     let conversationHistory: ConversationMessage[] = [];
     if (conversation) {

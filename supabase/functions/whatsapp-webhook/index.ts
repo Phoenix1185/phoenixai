@@ -1468,6 +1468,15 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Auto-detect language from first message
+    const detectedLang = await autoDetectAndSetLanguage(
+      supabase, 'whatsapp_conversations', conversation.id,
+      conversation.preferred_language, messageText, lovableApiKey
+    );
+    if (detectedLang && detectedLang !== conversation.preferred_language) {
+      conversation.preferred_language = detectedLang;
+    }
+
     console.log(`🧠 Processing: ${senderName} (${history.length} messages in history)`);
     console.log(`📝 Message: "${messageText.slice(0, 100)}${messageText.length > 100 ? '...' : ''}"`);
 
