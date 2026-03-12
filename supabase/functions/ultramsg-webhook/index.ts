@@ -388,7 +388,7 @@ async function processWithPhoenixAI(
   if (supabase) {
     const knowledgeEntry = await searchKnowledgeBase(supabase, message);
     if (knowledgeEntry) {
-      webContext += `\n\n[KNOWLEDGE-REF] ${knowledgeEntry.verified_answer}`;
+      webContext += `\n\nVerified information: ${knowledgeEntry.verified_answer}`;
       if (knowledgeEntry.source_url) webContext += ` (ref: ${knowledgeEntry.source_url})`;
     }
 

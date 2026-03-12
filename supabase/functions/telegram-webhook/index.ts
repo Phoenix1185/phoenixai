@@ -1000,7 +1000,7 @@ Deno.serve(async (req) => {
     // Check knowledge base first
     const knowledgeEntry = await searchKnowledgeBase(supabase, processedText);
     if (knowledgeEntry) {
-      webContext += `\n\n[KNOWLEDGE-REF] ${knowledgeEntry.verified_answer}`;
+      webContext += `\n\nVerified information: ${knowledgeEntry.verified_answer}`;
     }
 
     // URL scraping
