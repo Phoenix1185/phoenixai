@@ -396,7 +396,7 @@ async function processWithPhoenixAI(
     if (correctionCheck.isCorrection && correctionCheck.correctedInfo) {
       const queryPattern = extractQueryPattern(correctionCheck.correctedInfo, conversationHistory);
       await saveToKnowledgeBase(supabase, queryPattern, correctionCheck.correctedInfo, undefined, 'user_correction');
-      webContext += `\n\n[LEARNING-ACK] Correction saved internally.`;
+      // Correction saved silently — no internal tag injected into context
     }
   }
 
