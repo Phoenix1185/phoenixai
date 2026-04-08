@@ -56,7 +56,7 @@ const ApiKeysManager: React.FC = () => {
 
   const fetchKeys = async () => {
     if (!user) return;
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from('api_keys')
       .select('*')
       .eq('user_id', user.id)
@@ -77,14 +77,14 @@ const ApiKeysManager: React.FC = () => {
       const keyHash = await hashKey(rawKey);
       const keyPrefix = rawKey.substring(0, 12);
 
-      const { error } = await supabase.from('api_keys').insert({
+      const { error } = await (supabase as any).from('api_keys').insert({
         user_id: user.id,
         name: newKeyName.trim(),
         key_hash: keyHash,
         key_prefix: keyPrefix,
         permissions: ['chat'],
         rate_limit_per_minute: 60,
-      } as any);
+      });
 
       if (error) throw error;
 
@@ -101,7 +101,7 @@ const ApiKeysManager: React.FC = () => {
   };
 
   const deleteKey = async (id: string) => {
-    const { error } = await supabase.from('api_keys').delete().eq('id', id);
+    const { error } = await (supabase as any).from('api_keys').delete().eq('id', id);
     if (!error) {
       setKeys(keys.filter(k => k.id !== id));
       toast({ description: 'API key deleted' });
@@ -109,9 +109,9 @@ const ApiKeysManager: React.FC = () => {
   };
 
   const toggleKey = async (id: string, active: boolean) => {
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from('api_keys')
-      .update({ is_active: !active } as any)
+      .update({ is_active: !active })
       .eq('id', id);
     if (!error) {
       setKeys(keys.map(k => k.id === id ? { ...k, is_active: !active } : k));
