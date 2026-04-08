@@ -466,6 +466,11 @@ const Settings: React.FC = () => {
                     </Card>
                   </TabsContent>
 
+                  {/* API Tab */}
+                  <TabsContent value="api">
+                    <ApiKeysManager />
+                  </TabsContent>
+
                   {/* Voice Tab */}
                   <TabsContent value="voice">
                     <Card className="glass-card">
