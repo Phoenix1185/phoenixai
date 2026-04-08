@@ -113,7 +113,7 @@ Authorization: Bearer phx_your_api_key_here`} />
 
               <TabsContent value="chat" className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Badge className="bg-green-600">POST</Badge>
+                  <Badge className="bg-primary">POST</Badge>
                   <code className="text-sm font-mono">/v1/chat</code>
                 </div>
                 <p className="text-sm text-muted-foreground">Send a message and get an AI response.</p>
@@ -158,7 +158,7 @@ Authorization: Bearer phx_your_api_key_here`} />
 
               <TabsContent value="models" className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Badge className="bg-blue-600">GET</Badge>
+                  <Badge className="bg-secondary text-secondary-foreground">GET</Badge>
                   <code className="text-sm font-mono">/v1/models</code>
                 </div>
                 <p className="text-sm text-muted-foreground">List available AI models.</p>
@@ -168,7 +168,7 @@ Authorization: Bearer phx_your_api_key_here`} />
 
               <TabsContent value="usage" className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Badge className="bg-blue-600">GET</Badge>
+                  <Badge className="bg-secondary text-secondary-foreground">GET</Badge>
                   <code className="text-sm font-mono">/v1/usage</code>
                 </div>
                 <p className="text-sm text-muted-foreground">View your API usage statistics and recent logs.</p>
