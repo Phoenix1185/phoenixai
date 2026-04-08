@@ -14,7 +14,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import ThemeToggle from '@/components/ThemeToggle';
-import { User, Brain, Palette, LogOut, Save, Loader2, ArrowLeft, Camera, Lock, Shield, Bell, Volume2 } from 'lucide-react';
+import { User, Brain, Palette, LogOut, Save, Loader2, ArrowLeft, Camera, Lock, Shield, Bell, Volume2, Key } from 'lucide-react';
+import ApiKeysManager from '@/components/settings/ApiKeysManager';
 
 interface Profile {
   display_name: string | null;
@@ -267,7 +268,7 @@ const Settings: React.FC = () => {
                 </div>
               ) : (
                 <Tabs defaultValue="profile" className="space-y-6">
-                  <TabsList className="grid w-full grid-cols-5 glass-card">
+                  <TabsList className="grid w-full grid-cols-6 glass-card">
                     <TabsTrigger value="profile" className="gap-2">
                       <User className="h-4 w-4" />
                       <span className="hidden sm:inline">Profile</span>
@@ -279,6 +280,10 @@ const Settings: React.FC = () => {
                     <TabsTrigger value="voice" className="gap-2">
                       <Volume2 className="h-4 w-4" />
                       <span className="hidden sm:inline">Voice</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="api" className="gap-2">
+                      <Key className="h-4 w-4" />
+                      <span className="hidden sm:inline">API</span>
                     </TabsTrigger>
                     <TabsTrigger value="security" className="gap-2">
                       <Shield className="h-4 w-4" />
@@ -459,6 +464,11 @@ const Settings: React.FC = () => {
                         </Button>
                       </CardContent>
                     </Card>
+                  </TabsContent>
+
+                  {/* API Tab */}
+                  <TabsContent value="api">
+                    <ApiKeysManager />
                   </TabsContent>
 
                   {/* Voice Tab */}
