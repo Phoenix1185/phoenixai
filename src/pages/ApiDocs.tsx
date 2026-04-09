@@ -248,6 +248,9 @@ console.log(data.message);`} language="javascript" />
           </CardContent>
         </Card>
 
+        {/* API Playground */}
+        <ApiPlayground apiBase={apiBase} />
+
         {/* Errors */}
         <Card className="glass-card">
           <CardHeader><CardTitle>Error Codes</CardTitle></CardHeader>
