@@ -1,5 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Sparkles, X, ChevronUp, ChevronDown, Square, FileText } from 'lucide-react';
+import ConversationExport from './ConversationExport';
+import ScrollToBottom from './ScrollToBottom';
+import KeyboardShortcutsHint from './KeyboardShortcutsHint';
 import { AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -81,6 +84,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [showExtraControls, setShowExtraControls] = useState(false);
   const [modelSpeed, setModelSpeed] = useState<ModelSpeed>('auto');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -741,7 +745,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   return (
     <div className="flex flex-col h-full relative">
       {/* Messages area - scrollable */}
-      <div className="flex-1 overflow-y-auto p-4 pb-48 scrollbar-thin">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 pb-48 scrollbar-thin">
+      <ScrollToBottom scrollContainerRef={scrollContainerRef} />
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center min-h-full text-center px-4">
             <PhoenixLoader size="lg" animate={false} />
