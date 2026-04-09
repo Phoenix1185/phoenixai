@@ -1,12 +1,72 @@
 import React, { useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, Copy, Zap, BookOpen, Code, Terminal } from 'lucide-react';
+import { ArrowLeft, Copy, Zap, BookOpen, Code, Terminal, Play, Loader2 } from 'lucide-react';
 import PhoenixLogo from '@/components/PhoenixLogo';
 import { useToast } from '@/hooks/use-toast';
+
+const ApiPlayground: React.FC<{ apiBase: string }> = ({ apiBase }) => {
+  const [apiKey, setApiKey] = useState('');
+  const [message, setMessage] = useState('Hello Phoenix!');
+  const [response, setResponse] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+
+  const tryIt = async () => {
+    if (!apiKey.startsWith('phx_')) {
+      toast({ variant: 'destructive', description: 'Enter a valid API key starting with phx_' });
+      return;
+    }
+    setLoading(true);
+    setResponse('');
+    try {
+      const res = await fetch(`${apiBase}/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify({ message }),
+      });
+      const data = await res.json();
+      setResponse(JSON.stringify(data, null, 2));
+    } catch (err: any) {
+      setResponse(`Error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card className="glass-card border-primary/20">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Play className="h-5 w-5 text-primary" /> API Playground
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label>API Key</Label>
+          <Input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="phx_your_api_key" className="font-mono text-sm bg-background" />
+        </div>
+        <div className="space-y-2">
+          <Label>Message</Label>
+          <Textarea value={message} onChange={e => setMessage(e.target.value)} className="bg-background" rows={2} />
+        </div>
+        <Button onClick={tryIt} disabled={loading || !apiKey || !message} className="gradient-phoenix text-primary-foreground">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
+          {loading ? 'Sending...' : 'Try it'}
+        </Button>
+        {response && (
+          <pre className="bg-muted/80 rounded-lg p-4 overflow-x-auto text-sm font-mono max-h-[300px] overflow-y-auto">{response}</pre>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
 
 const ApiDocs: React.FC = () => {
   const navigate = useNavigate();
@@ -244,6 +304,9 @@ console.log(data.message);`} language="javascript" />
             </Tabs>
           </CardContent>
         </Card>
+
+        {/* API Playground */}
+        <ApiPlayground apiBase={apiBase} />
 
         {/* Errors */}
         <Card className="glass-card">
