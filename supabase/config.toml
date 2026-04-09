@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.document-analyze]
 verify_jwt = false
+
+[functions.phoenix-api]
+verify_jwt = false
