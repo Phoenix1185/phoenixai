@@ -949,6 +949,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <p className="text-xs text-muted-foreground">
                   Live web search • {voiceInputSupported ? 'Voice' : ''} • Image
                 </p>
+                <span className="text-muted-foreground">•</span>
+                <ConversationExport messages={messages} title={conversationId ? 'Phoenix Chat' : 'New Chat'} />
+                <KeyboardShortcutsHint />
               </div>
             )}
           </div>
