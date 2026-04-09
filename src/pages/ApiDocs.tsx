@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, Copy, Zap, BookOpen, Code, Terminal } from 'lucide-react';
+import { ArrowLeft, Copy, Zap, BookOpen, Code, Terminal, Play, Loader2 } from 'lucide-react';
 import PhoenixLogo from '@/components/PhoenixLogo';
 import { useToast } from '@/hooks/use-toast';
 
