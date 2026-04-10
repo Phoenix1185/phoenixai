@@ -311,7 +311,43 @@ POST /v1/chat
 }`} language="json" />
               </TabsContent>
 
-              <TabsContent value="models" className="space-y-4">
+              <TabsContent value="images" className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-primary">POST</Badge>
+                  <code className="text-sm font-mono">/v1/images</code>
+                </div>
+                <p className="text-sm text-muted-foreground">Generate an image from a text prompt.</p>
+                
+                <h4 className="font-medium text-sm mt-4">Request Body</h4>
+                <div className="bg-muted/50 rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b"><th className="text-left p-3">Field</th><th className="text-left p-3">Type</th><th className="text-left p-3">Required</th><th className="text-left p-3">Description</th></tr></thead>
+                    <tbody>
+                      <tr className="border-b"><td className="p-3 font-mono text-xs">prompt</td><td className="p-3">string</td><td className="p-3">✅</td><td className="p-3">Image description (max 4,000 chars)</td></tr>
+                      <tr className="border-b"><td className="p-3 font-mono text-xs">model</td><td className="p-3">string</td><td className="p-3">❌</td><td className="p-3">Image model (default: gemini-3.1-flash-image-preview)</td></tr>
+                      <tr><td className="p-3 font-mono text-xs">size</td><td className="p-3">string</td><td className="p-3">❌</td><td className="p-3">Image size (default: 1024x1024)</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <h4 className="font-medium text-sm mt-4">Example</h4>
+                <CodeBlock code={`// Request
+POST /v1/images
+{
+  "prompt": "A futuristic city skyline at sunset"
+}
+
+// Response (200 OK)
+{
+  "id": "...",
+  "model": "google/gemini-3.1-flash-image-preview",
+  "images": [
+    { "url": "https://...", "revised_prompt": "..." }
+  ],
+  "created_at": "2026-04-10T12:00:00.000Z"
+}`} language="json" />
+              </TabsContent>
+
                 <div className="flex items-center gap-2">
                   <Badge className="bg-secondary text-secondary-foreground">GET</Badge>
                   <code className="text-sm font-mono">/v1/models</code>
