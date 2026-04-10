@@ -190,7 +190,7 @@ const ApiDocs: React.FC = () => {
           <div className="flex flex-wrap gap-3">
             <Badge className="gap-1"><Zap className="h-3 w-3" /> REST API</Badge>
             <Badge className="gap-1"><BookOpen className="h-3 w-3" /> JSON Responses</Badge>
-            <Badge className="gap-1"><Code className="h-3 w-3" /> 6 AI Models</Badge>
+            <Badge className="gap-1"><Code className="h-3 w-3" /> 12+ AI Models</Badge>
           </div>
         </div>
 
@@ -264,6 +264,7 @@ Authorization: Bearer phx_your_api_key_here`} />
             <Tabs defaultValue="chat" className="space-y-4">
               <TabsList className="flex-wrap">
                 <TabsTrigger value="chat">Chat</TabsTrigger>
+                <TabsTrigger value="images">Images</TabsTrigger>
                 <TabsTrigger value="models">Models</TabsTrigger>
                 <TabsTrigger value="usage">Usage</TabsTrigger>
                 <TabsTrigger value="health">Health</TabsTrigger>
