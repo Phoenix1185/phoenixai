@@ -17,8 +17,9 @@ const API_BASE = 'https://ixohndnnrivfmaxecpkt.supabase.co/functions/v1/phoenix-
 const ApiPlayground: React.FC = () => {
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('Hello Phoenix!');
-  const [model, setModel] = useState('google/gemini-2.5-flash');
+  const [model, setModel] = useState('google/gemini-3-flash-preview');
   const [endpoint, setEndpoint] = useState('/v1/chat');
+  const [imagePrompt, setImagePrompt] = useState('A beautiful sunset over mountains');
   const [response, setResponse] = useState('');
   const [loading, setLoading] = useState(false);
   const [statusCode, setStatusCode] = useState<number | null>(null);
@@ -34,11 +35,14 @@ const ApiPlayground: React.FC = () => {
     setStatusCode(null);
 
     try {
-      const isPost = endpoint === '/v1/chat';
+      const isPost = endpoint === '/v1/chat' || endpoint === '/v1/images';
+      let reqBody: any = undefined;
+      if (endpoint === '/v1/chat') reqBody = { message, model };
+      else if (endpoint === '/v1/images') reqBody = { prompt: imagePrompt };
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: isPost ? 'POST' : 'GET',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-        ...(isPost ? { body: JSON.stringify({ message, model }) } : {}),
+        ...(isPost ? { body: JSON.stringify(reqBody) } : {}),
       });
       setStatusCode(res.status);
       const data = await res.json();
@@ -70,6 +74,7 @@ const ApiPlayground: React.FC = () => {
               <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="/v1/chat">POST /v1/chat</SelectItem>
+                <SelectItem value="/v1/images">POST /v1/images</SelectItem>
                 <SelectItem value="/v1/models">GET /v1/models</SelectItem>
                 <SelectItem value="/v1/usage">GET /v1/usage</SelectItem>
                 <SelectItem value="/v1/health">GET /v1/health</SelectItem>
@@ -89,15 +94,23 @@ const ApiPlayground: React.FC = () => {
               <Select value={model} onValueChange={setModel}>
                 <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="google/gemini-3-flash-preview">Gemini 3 Flash</SelectItem>
                   <SelectItem value="google/gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
                   <SelectItem value="google/gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
-                  <SelectItem value="google/gemini-2.5-flash-lite">Gemini Flash Lite</SelectItem>
+                  <SelectItem value="google/gemini-3.1-pro-preview">Gemini 3.1 Pro</SelectItem>
                   <SelectItem value="openai/gpt-5-mini">GPT-5 Mini</SelectItem>
                   <SelectItem value="openai/gpt-5">GPT-5</SelectItem>
-                  <SelectItem value="openai/gpt-5-nano">GPT-5 Nano</SelectItem>
+                  <SelectItem value="openai/gpt-5.2">GPT-5.2</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+          </div>
+        )}
+
+        {endpoint === '/v1/images' && (
+          <div className="space-y-2">
+            <Label>Image Prompt</Label>
+            <Textarea value={imagePrompt} onChange={e => setImagePrompt(e.target.value)} className="bg-background" rows={2} placeholder="Describe the image you want to generate..." />
           </div>
         )}
 
