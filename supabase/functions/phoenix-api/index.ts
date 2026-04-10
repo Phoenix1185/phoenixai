@@ -6,7 +6,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-api-key",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
+
+function respond(status: number, data: any): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 async function hashKey(key: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -29,7 +37,10 @@ Deno.serve(async (req) => {
     // Extract API key from header
     const apiKey = req.headers.get("x-api-key") || req.headers.get("authorization")?.replace("Bearer ", "");
     if (!apiKey || !apiKey.startsWith("phx_")) {
-      return respond(401, { error: "Missing or invalid API key. Keys start with 'phx_'" });
+      return respond(401, { 
+        error: "Missing or invalid API key",
+        hint: "Include your API key in the 'x-api-key' header. Keys start with 'phx_'."
+      });
     }
 
     // Validate API key
@@ -41,8 +52,16 @@ Deno.serve(async (req) => {
       .eq("is_active", true)
       .maybeSingle();
 
-    if (keyError || !keyRecord) {
-      return respond(401, { error: "Invalid API key" });
+    if (keyError) {
+      console.error("DB error looking up key:", keyError);
+      return respond(500, { error: "Internal server error" });
+    }
+
+    if (!keyRecord) {
+      return respond(401, { 
+        error: "Invalid API key",
+        hint: "This key does not exist or has been deactivated. Create a new key in Settings → API."
+      });
     }
 
     // Check expiry
@@ -50,20 +69,55 @@ Deno.serve(async (req) => {
       return respond(401, { error: "API key has expired" });
     }
 
-    // Parse request
+    // Check rate limit
+    const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
+    const { count: recentRequests } = await supabase
+      .from("api_usage_logs")
+      .select("*", { count: "exact", head: true })
+      .eq("api_key_id", keyRecord.id)
+      .gte("created_at", oneMinuteAgo);
+
+    if (recentRequests !== null && recentRequests >= keyRecord.rate_limit_per_minute) {
+      return respond(429, { 
+        error: "Rate limit exceeded",
+        limit: keyRecord.rate_limit_per_minute,
+        retry_after_seconds: 60,
+      });
+    }
+
+    // Parse request path - handle both /phoenix-api/v1/chat and /v1/chat
     const url = new URL(req.url);
-    const path = url.pathname.split("/phoenix-api")[1] || "/";
-    const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+    const fullPath = url.pathname;
+    const pathAfterFunction = fullPath.includes("/phoenix-api") 
+      ? fullPath.split("/phoenix-api")[1] || "/"
+      : fullPath;
+    const path = pathAfterFunction.replace(/\/+$/, "") || "/"; // normalize trailing slashes
+
+    // Parse body for POST
+    let body: any = {};
+    if (req.method === "POST") {
+      try {
+        body = await req.json();
+      } catch {
+        return respond(400, { error: "Invalid JSON body" });
+      }
+    }
 
     let result: any;
     let endpoint = path;
 
     // Route endpoints
     if (path === "/v1/chat" || path === "/chat" || path === "/") {
+      if (req.method !== "POST") {
+        return respond(405, { 
+          error: "Method not allowed. Use POST for /v1/chat.",
+          hint: "Send a POST request with a JSON body containing a 'message' field."
+        });
+      }
       if (!keyRecord.permissions.includes("chat")) {
         return respond(403, { error: "API key lacks 'chat' permission" });
       }
-      result = await handleChat(supabase, body, keyRecord);
+      result = await handleChat(body, keyRecord);
       endpoint = "/v1/chat";
     } else if (path === "/v1/models" || path === "/models") {
       result = handleModels();
@@ -71,8 +125,19 @@ Deno.serve(async (req) => {
     } else if (path === "/v1/usage" || path === "/usage") {
       result = await handleUsage(supabase, keyRecord);
       endpoint = "/v1/usage";
+    } else if (path === "/v1/health" || path === "/health") {
+      result = { status: "ok", timestamp: new Date().toISOString(), version: "1.0.0" };
+      endpoint = "/v1/health";
     } else {
-      return respond(404, { error: "Unknown endpoint", available: ["/v1/chat", "/v1/models", "/v1/usage"] });
+      return respond(404, { 
+        error: "Unknown endpoint",
+        available_endpoints: {
+          "POST /v1/chat": "Send a message and get an AI response",
+          "GET /v1/models": "List available AI models",
+          "GET /v1/usage": "View your API usage statistics",
+          "GET /v1/health": "Check API health status",
+        }
+      });
     }
 
     const responseTime = Date.now() - startTime;
@@ -92,37 +157,52 @@ Deno.serve(async (req) => {
     }).eq("id", keyRecord.id).then(() => {});
 
     // Remove internal field
+    const tokens = result._tokens;
     delete result._tokens;
 
     return respond(200, result);
-  } catch (e) {
+  } catch (e: any) {
     console.error("API error:", e);
-    return respond(500, { error: "Internal server error" });
-  }
-
-  function respond(status: number, data: any) {
-    return new Response(JSON.stringify(data), {
-      status,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    const status = e.status || 500;
+    return respond(status, { error: e.message || "Internal server error" });
   }
 });
 
-async function handleChat(supabase: any, body: any, keyRecord: any) {
-  const { message, conversation_id, model, stream } = body;
+async function handleChat(body: any, keyRecord: any) {
+  const { message, model, system_prompt } = body;
   
   if (!message || typeof message !== "string") {
-    throw Object.assign(new Error("'message' field is required"), { status: 400 });
+    throw Object.assign(new Error("'message' field is required and must be a string"), { status: 400 });
   }
 
-  // Use phoenix-core for AI response
+  if (message.length > 32000) {
+    throw Object.assign(new Error("Message too long. Maximum 32,000 characters."), { status: 400 });
+  }
+
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
   if (!lovableApiKey) {
+    console.error("LOVABLE_API_KEY not configured");
     throw new Error("AI service not configured");
   }
 
+  const validModels = [
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash-lite",
+    "openai/gpt-5-mini",
+    "openai/gpt-5",
+    "openai/gpt-5-nano",
+  ];
+
   const selectedModel = model || "google/gemini-2.5-flash";
-  
+  if (!validModels.includes(selectedModel)) {
+    throw Object.assign(new Error(`Invalid model '${selectedModel}'. Valid models: ${validModels.join(", ")}`), { status: 400 });
+  }
+
+  const systemContent = typeof system_prompt === "string" && system_prompt.length > 0
+    ? system_prompt
+    : "You are Phoenix AI, an intelligent, helpful, and friendly assistant. Respond naturally and helpfully.";
+
   const aiResponse = await fetch("https://api.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -132,11 +212,8 @@ async function handleChat(supabase: any, body: any, keyRecord: any) {
     body: JSON.stringify({
       model: selectedModel,
       messages: [
-        {
-          role: "system",
-          content: "You are Phoenix AI, an intelligent, helpful, and friendly assistant. Respond naturally and helpfully."
-        },
-        { role: "user", content: message }
+        { role: "system", content: systemContent },
+        { role: "user", content: message },
       ],
       max_tokens: 4096,
     }),
@@ -144,7 +221,10 @@ async function handleChat(supabase: any, body: any, keyRecord: any) {
 
   if (!aiResponse.ok) {
     const errText = await aiResponse.text();
-    console.error("AI API error:", errText);
+    console.error("AI API error:", aiResponse.status, errText);
+    if (aiResponse.status === 429) {
+      throw Object.assign(new Error("AI service rate limited. Try again shortly."), { status: 429 });
+    }
     throw new Error("AI service error");
   }
 
@@ -171,9 +251,10 @@ function handleModels() {
     models: [
       { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", description: "Fast & balanced", default: true },
       { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", description: "Best for complex reasoning" },
+      { id: "google/gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite", description: "Fastest, cheapest" },
       { id: "openai/gpt-5-mini", name: "GPT-5 Mini", description: "Strong reasoning, lower cost" },
       { id: "openai/gpt-5", name: "GPT-5", description: "Most capable, higher cost" },
-      { id: "google/gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite", description: "Fastest, cheapest" },
+      { id: "openai/gpt-5-nano", name: "GPT-5 Nano", description: "Ultra-fast, cost-effective" },
     ],
   };
 }
@@ -181,14 +262,18 @@ function handleModels() {
 async function handleUsage(supabase: any, keyRecord: any) {
   const { data: logs } = await supabase
     .from("api_usage_logs")
-    .select("endpoint, status_code, tokens_used, created_at")
+    .select("endpoint, status_code, tokens_used, response_time_ms, created_at")
     .eq("api_key_id", keyRecord.id)
     .order("created_at", { ascending: false })
     .limit(100);
 
+  const totalTokens = (logs || []).reduce((sum: number, l: any) => sum + (l.tokens_used || 0), 0);
+
   return {
     key_name: keyRecord.name,
     total_requests: keyRecord.total_requests,
+    total_tokens_used: totalTokens,
+    rate_limit_per_minute: keyRecord.rate_limit_per_minute,
     last_used: keyRecord.last_used_at,
     recent_logs: logs || [],
   };
