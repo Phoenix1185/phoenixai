@@ -348,6 +348,7 @@ POST /v1/images
 }`} language="json" />
               </TabsContent>
 
+              <TabsContent value="models" className="space-y-4">
                 <div className="flex items-center gap-2">
                   <Badge className="bg-secondary text-secondary-foreground">GET</Badge>
                   <code className="text-sm font-mono">/v1/models</code>
