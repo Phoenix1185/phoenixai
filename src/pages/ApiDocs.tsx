@@ -17,8 +17,9 @@ const API_BASE = 'https://ixohndnnrivfmaxecpkt.supabase.co/functions/v1/phoenix-
 const ApiPlayground: React.FC = () => {
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('Hello Phoenix!');
-  const [model, setModel] = useState('google/gemini-2.5-flash');
+  const [model, setModel] = useState('google/gemini-3-flash-preview');
   const [endpoint, setEndpoint] = useState('/v1/chat');
+  const [imagePrompt, setImagePrompt] = useState('A beautiful sunset over mountains');
   const [response, setResponse] = useState('');
   const [loading, setLoading] = useState(false);
   const [statusCode, setStatusCode] = useState<number | null>(null);
@@ -34,11 +35,14 @@ const ApiPlayground: React.FC = () => {
     setStatusCode(null);
 
     try {
-      const isPost = endpoint === '/v1/chat';
+      const isPost = endpoint === '/v1/chat' || endpoint === '/v1/images';
+      let reqBody: any = undefined;
+      if (endpoint === '/v1/chat') reqBody = { message, model };
+      else if (endpoint === '/v1/images') reqBody = { prompt: imagePrompt };
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: isPost ? 'POST' : 'GET',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-        ...(isPost ? { body: JSON.stringify({ message, model }) } : {}),
+        ...(isPost ? { body: JSON.stringify(reqBody) } : {}),
       });
       setStatusCode(res.status);
       const data = await res.json();
@@ -70,6 +74,7 @@ const ApiPlayground: React.FC = () => {
               <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="/v1/chat">POST /v1/chat</SelectItem>
+                <SelectItem value="/v1/images">POST /v1/images</SelectItem>
                 <SelectItem value="/v1/models">GET /v1/models</SelectItem>
                 <SelectItem value="/v1/usage">GET /v1/usage</SelectItem>
                 <SelectItem value="/v1/health">GET /v1/health</SelectItem>
@@ -89,15 +94,23 @@ const ApiPlayground: React.FC = () => {
               <Select value={model} onValueChange={setModel}>
                 <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="google/gemini-3-flash-preview">Gemini 3 Flash</SelectItem>
                   <SelectItem value="google/gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
                   <SelectItem value="google/gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
-                  <SelectItem value="google/gemini-2.5-flash-lite">Gemini Flash Lite</SelectItem>
+                  <SelectItem value="google/gemini-3.1-pro-preview">Gemini 3.1 Pro</SelectItem>
                   <SelectItem value="openai/gpt-5-mini">GPT-5 Mini</SelectItem>
                   <SelectItem value="openai/gpt-5">GPT-5</SelectItem>
-                  <SelectItem value="openai/gpt-5-nano">GPT-5 Nano</SelectItem>
+                  <SelectItem value="openai/gpt-5.2">GPT-5.2</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+          </div>
+        )}
+
+        {endpoint === '/v1/images' && (
+          <div className="space-y-2">
+            <Label>Image Prompt</Label>
+            <Textarea value={imagePrompt} onChange={e => setImagePrompt(e.target.value)} className="bg-background" rows={2} placeholder="Describe the image you want to generate..." />
           </div>
         )}
 
@@ -177,7 +190,7 @@ const ApiDocs: React.FC = () => {
           <div className="flex flex-wrap gap-3">
             <Badge className="gap-1"><Zap className="h-3 w-3" /> REST API</Badge>
             <Badge className="gap-1"><BookOpen className="h-3 w-3" /> JSON Responses</Badge>
-            <Badge className="gap-1"><Code className="h-3 w-3" /> 6 AI Models</Badge>
+            <Badge className="gap-1"><Code className="h-3 w-3" /> 12+ AI Models</Badge>
           </div>
         </div>
 
@@ -251,6 +264,7 @@ Authorization: Bearer phx_your_api_key_here`} />
             <Tabs defaultValue="chat" className="space-y-4">
               <TabsList className="flex-wrap">
                 <TabsTrigger value="chat">Chat</TabsTrigger>
+                <TabsTrigger value="images">Images</TabsTrigger>
                 <TabsTrigger value="models">Models</TabsTrigger>
                 <TabsTrigger value="usage">Usage</TabsTrigger>
                 <TabsTrigger value="health">Health</TabsTrigger>
@@ -293,6 +307,43 @@ POST /v1/chat
     "completion_tokens": 200,
     "total_tokens": 215
   },
+  "created_at": "2026-04-10T12:00:00.000Z"
+}`} language="json" />
+              </TabsContent>
+
+              <TabsContent value="images" className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-primary">POST</Badge>
+                  <code className="text-sm font-mono">/v1/images</code>
+                </div>
+                <p className="text-sm text-muted-foreground">Generate an image from a text prompt.</p>
+                
+                <h4 className="font-medium text-sm mt-4">Request Body</h4>
+                <div className="bg-muted/50 rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b"><th className="text-left p-3">Field</th><th className="text-left p-3">Type</th><th className="text-left p-3">Required</th><th className="text-left p-3">Description</th></tr></thead>
+                    <tbody>
+                      <tr className="border-b"><td className="p-3 font-mono text-xs">prompt</td><td className="p-3">string</td><td className="p-3">✅</td><td className="p-3">Image description (max 4,000 chars)</td></tr>
+                      <tr className="border-b"><td className="p-3 font-mono text-xs">model</td><td className="p-3">string</td><td className="p-3">❌</td><td className="p-3">Image model (default: gemini-3.1-flash-image-preview)</td></tr>
+                      <tr><td className="p-3 font-mono text-xs">size</td><td className="p-3">string</td><td className="p-3">❌</td><td className="p-3">Image size (default: 1024x1024)</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <h4 className="font-medium text-sm mt-4">Example</h4>
+                <CodeBlock code={`// Request
+POST /v1/images
+{
+  "prompt": "A futuristic city skyline at sunset"
+}
+
+// Response (200 OK)
+{
+  "id": "...",
+  "model": "google/gemini-3.1-flash-image-preview",
+  "images": [
+    { "url": "https://...", "revised_prompt": "..." }
+  ],
   "created_at": "2026-04-10T12:00:00.000Z"
 }`} language="json" />
               </TabsContent>
